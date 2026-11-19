@@ -1,0 +1,40 @@
+:root {
+  --ww-ink: #1b2a41;
+  --ww-accent: #1f6f78;
+  --ww-surface: #f5f7f8;
+  --bs-body-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --bs-body-color: var(--ww-ink);
+}
+
+body {
+  background: var(--ww-surface);
+}
+
+.ww-brand {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ww-ink);
+}
+
+.ww-brand span {
+  color: var(--ww-accent);
+}
+
+.ww-card {
+  background: #fff;
+  border: 1px solid #dfe5e8;
+  border-radius: 12px;
+}
+
+.btn-ww {
+  background: var(--ww-accent);
+  border-color: var(--ww-accent);
+  color: #fff;
+}
+
+.btn-ww:hover,
+.btn-ww:focus-visible {
+  background: #185a62;
+  border-color: #185a62;
+  color: #fff;
+}
