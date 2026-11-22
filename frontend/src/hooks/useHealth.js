@@ -20,8 +20,23 @@ export default function useHealth() {
     }, []);
 
     useEffect(() => {
-        check();
-    }, [check]);
+        let active = true;
+        getHealth()
+            .then((data) => {
+                if (!active) return;
+                setInfo(data);
+                setStatus("online");
+            })
+            .catch(() => {
+                if (!active) return;
+                setInfo(null);
+                setStatus("offline");
+            });
+
+        return () => {
+            active = false;
+        };
+    }, []);
 
     return { status, info, check };
 }

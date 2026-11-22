@@ -1,6 +1,6 @@
 # WriteWise AI
 
-WriteWise AI is a writing analysis platform. The Flask API checks grammar, readability, vocabulary, and sentence complexity. The React frontend talks to that API.
+WriteWise AI is a writing analysis platform. The Flask API checks grammar, readability, vocabulary, and sentence complexity. The React frontend talks to that API. Phase 5 adds optional AI-powered rewrites and writing feedback.
 
 Phase 4 adds document upload. The API accepts a `.txt`, `.pdf`, or `.docx` file, extracts the text, and can run the same analysis used by `POST /api/analyze`.
 
@@ -91,6 +91,63 @@ Error bodies look like:
 
 - `GET /api/health` — API and database status
 - `POST /api/analyze` — JSON body `{ "text": "..." }` for writing analysis
+- `POST /api/improve` — JSON body `{ "text": "...", "tone": "Professional" }` for an AI rewrite and feedback
+
+## AI writing improvement
+
+Set the provider credentials in `backend/.env`. The provider key is read only by Flask; do not put it in a `VITE_` variable or send it from the browser.
+
+```dotenv
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-server-side-google-ai-studio-key
+LLM_MODEL=gemini-3.5-flash-lite
+LLM_TIMEOUT_SECONDS=30
+```
+
+Install the backend dependencies after updating the provider package:
+
+```bash
+cd backend
+python -m pip install -r requirements.txt
+```
+
+For Anthropic, set `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, and an Anthropic model ID instead. For Gemini, set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and `LLM_MODEL=gemini-3.5-flash-lite`. Keep both API keys in `backend/.env`; never expose them to the frontend. The Gemini model ID is listed as a stable model in Google's current model documentation.
+
+`POST /api/improve` accepts non-empty text up to 12,000 characters and an optional exact tone: `Professional`, `Academic`, `Formal`, `Casual`, or `Friendly`. If tone is omitted, it defaults to `Professional`. The response includes a meaning-preserving rewrite, grammar explanations with original and corrected text, and suggestions grouped under `Readability`, `Vocabulary`, `Sentence structure`, and `Repetition`.
+
+Example request:
+
+```json
+{
+  "text": "The team complete the report yesterday.",
+  "tone": "Professional"
+}
+```
+
+Example response:
+
+```json
+{
+  "success": true,
+  "tone": "Professional",
+  "rewrite": "The team completed the report yesterday.",
+  "grammar_explanations": [
+    {
+      "original_text": "The team complete the report yesterday.",
+      "corrected_text": "The team completed the report yesterday.",
+      "explanation": "Use the past tense for an action that happened yesterday."
+    }
+  ],
+  "suggestions": {
+    "Readability": [],
+    "Vocabulary": [],
+    "Sentence structure": [],
+    "Repetition": []
+  }
+}
+```
+
+The improvement endpoint does not save submitted text or AI results to MongoDB. Missing configuration returns `503`; invalid input returns `400`; timeouts return `504`; provider rate limits return `429`; and other provider or output errors return a generic `502` response without provider details.
 
 ## Tests
 

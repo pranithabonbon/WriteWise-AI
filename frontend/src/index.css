@@ -38,3 +38,36 @@ body {
   border-color: #185a62;
   color: #fff;
 }
+
+.ww-home {
+  max-width: 880px;
+}
+
+.ww-eyebrow {
+  color: var(--ww-accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.ww-writing-input {
+  min-height: 190px;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.ww-rewrite {
+  white-space: pre-wrap;
+  line-height: 1.75;
+}
+
+.ww-explanation,
+.ww-suggestion-group {
+  border-left: 3px solid #c9dfe0;
+  padding: 0.25rem 0 0.25rem 1rem;
+}
+
+.ww-suggestion-group li + li {
+  margin-top: 0.5rem;
+}

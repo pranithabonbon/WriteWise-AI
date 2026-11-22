@@ -1,0 +1,262 @@
+"""Unit tests for AI improvement validation and provider error handling."""
+
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import anthropic
+import pytest
+from google import genai
+from google.genai import errors as gemini_errors
+
+from app.services.ai_improvement_service import (
+    AIConfigurationError,
+    AIImprovementService,
+    AIProviderError,
+    AIProviderRateLimitError,
+    AIProviderTimeoutError,
+    InputValidationError,
+    InvalidAIResponseError,
+    AnthropicProvider,
+    GeminiProvider,
+    MAX_INPUT_CHARACTERS,
+    SUGGESTION_CATEGORIES,
+    create_ai_improvement_service,
+)
+
+
+def valid_result():
+    return {
+        "rewrite": "The team completed the report.",
+        "grammar_explanations": [{
+            "original_text": "The team complete the report.",
+            "corrected_text": "The team completed the report.",
+            "explanation": "Use the past tense for an action that is finished.",
+        }],
+        "suggestions": {category: [] for category in SUGGESTION_CATEGORIES},
+    }
+
+
+class FakeProvider:
+    def __init__(self, result=None):
+        self.result = result or valid_result()
+        self.calls = []
+
+    def generate_improvement(self, text, tone):
+        self.calls.append((text, tone))
+        return self.result
+
+
+def test_service_returns_validated_result_and_passes_tone():
+    provider = FakeProvider()
+    result = AIImprovementService(provider).improve("The team complete it.", "Academic")
+
+    assert result == valid_result()
+    assert provider.calls == [("The team complete it.", "Academic")]
+
+
+@pytest.mark.parametrize("text", ["", "  \n", None])
+def test_service_rejects_empty_or_non_string_text_before_provider(text):
+    provider = FakeProvider()
+    with pytest.raises(InputValidationError):
+        AIImprovementService(provider).improve(text)
+    assert provider.calls == []
+
+
+def test_service_rejects_too_long_text_before_provider():
+    provider = FakeProvider()
+    with pytest.raises(InputValidationError, match="characters or fewer"):
+        AIImprovementService(provider).improve("x" * (MAX_INPUT_CHARACTERS + 1))
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize("tone", ["casual", "Friendly ", "", None])
+def test_service_rejects_unsupported_tones_before_provider(tone):
+    provider = FakeProvider()
+    with pytest.raises(InputValidationError, match="Tone must be"):
+        AIImprovementService(provider).improve("Some writing.", tone)
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result.update(rewrite="  "),
+        lambda result: result.update(grammar_explanations=[{"original_text": "x"}]),
+        lambda result: result["suggestions"].pop("Vocabulary"),
+        lambda result: result["suggestions"].update({"Readability": "too broad"}),
+        lambda result: result.update(unexpected="provider detail"),
+    ],
+)
+def test_service_rejects_malformed_provider_output(mutate):
+    result = valid_result()
+    mutate(result)
+    with pytest.raises(InvalidAIResponseError):
+        AIImprovementService(FakeProvider(result)).improve("Some writing.")
+
+
+def test_provider_uses_timeout_and_forced_structured_tool(monkeypatch):
+    message = SimpleNamespace(content=[SimpleNamespace(
+        type="tool_use", name=AnthropicProvider.TOOL_NAME, input=valid_result()
+    )])
+    client = Mock()
+    client.messages.create.return_value = message
+    monkeypatch.setattr(anthropic, "Anthropic", Mock(return_value=client))
+
+    provider = AnthropicProvider("test-key", "test-model", 7)
+    assert provider.generate_improvement("Some writing.", "Formal") == valid_result()
+    anthropic.Anthropic.assert_called_once_with(
+        api_key="test-key", timeout=7, max_retries=0
+    )
+    kwargs = client.messages.create.call_args.kwargs
+    assert kwargs["tool_choice"] == {
+        "type": "tool", "name": AnthropicProvider.TOOL_NAME
+    }
+    assert kwargs["tools"][0]["input_schema"]["required"] == [
+        "rewrite", "grammar_explanations", "suggestions"
+    ]
+
+
+@pytest.mark.parametrize(
+    "provider_error,expected",
+    [
+        (anthropic.APITimeoutError(request=Mock()), AIProviderTimeoutError),
+        (anthropic.RateLimitError("rate limited", response=Mock(), body={}), AIProviderRateLimitError),
+        (anthropic.APIError("provider detail", request=Mock(), body={}), AIProviderError),
+    ],
+)
+def test_provider_maps_errors_without_exposing_details(monkeypatch, provider_error, expected):
+    client = Mock()
+    client.messages.create.side_effect = provider_error
+    monkeypatch.setattr(anthropic, "Anthropic", Mock(return_value=client))
+    provider = AnthropicProvider("test-key", "test-model", 1)
+
+    with pytest.raises(expected) as caught:
+        provider.generate_improvement("Some writing.", "Formal")
+    assert "provider detail" not in str(caught.value)
+
+
+def test_provider_logs_safe_anthropic_error_diagnostics(monkeypatch, caplog):
+    secret = "sk-ant-test-secret"
+    error = anthropic.APIStatusError(
+        "invalid request",
+        response=Mock(status_code=404, headers={"request-id": "req_test"}),
+        body={"error": {"type": "not_found_error", "message": "model not found " + secret}},
+    )
+    client = Mock()
+    client.messages.create.side_effect = error
+    monkeypatch.setattr(anthropic, "Anthropic", Mock(return_value=client))
+    provider = AnthropicProvider(secret, "invalid-model", 1)
+
+    with caplog.at_level("WARNING", logger="app.services.ai_improvement_service"):
+        with pytest.raises(AIProviderError):
+            provider.generate_improvement("Some writing.", "Formal")
+
+    assert "status=404" in caplog.text
+    assert "not_found_error" in caplog.text
+    assert "model not found" in caplog.text
+    assert "req_test" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_gemini_provider_uses_sdk_json_schema_and_timeout(monkeypatch):
+    client = Mock()
+    client.models.generate_content.return_value = SimpleNamespace(
+        text=json.dumps(valid_result())
+    )
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+
+    provider = GeminiProvider("test-key", "gemini-3.5-flash-lite", 7)
+    assert provider.generate_improvement("Some writing.", "Friendly") == valid_result()
+    genai.Client.assert_called_once()
+    client_config = genai.Client.call_args.kwargs
+    assert client_config["api_key"] == "test-key"
+    assert client_config["http_options"].timeout == 7000
+    assert client_config["http_options"].retry_options.attempts == 1
+    kwargs = client.models.generate_content.call_args.kwargs
+    assert kwargs["model"] == "gemini-3.5-flash-lite"
+    assert "Friendly tone" in kwargs["contents"]
+    assert kwargs["config"].response_mime_type == "application/json"
+    assert kwargs["config"].response_schema["required"] == [
+        "rewrite", "grammar_explanations", "suggestions"
+    ]
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (429, AIProviderRateLimitError),
+        (504, AIProviderTimeoutError),
+        (401, AIProviderError),
+    ],
+)
+def test_gemini_provider_maps_api_errors_safely(monkeypatch, caplog, code, expected):
+    secret = "AIza123456789012345678901234567890"
+    error = gemini_errors.APIError(
+        code,
+        {"error": {"message": "provider detail " + secret}},
+    )
+    client = Mock()
+    client.models.generate_content.side_effect = error
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+    provider = GeminiProvider(secret, "gemini-3.5-flash-lite", 5)
+
+    with caplog.at_level("WARNING", logger="app.services.ai_improvement_service"):
+        with pytest.raises(expected):
+            provider.generate_improvement("Some writing.", "Formal")
+
+    assert f"status={code}" in caplog.text
+    assert "provider detail" in caplog.text
+    assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "provider_name,key_name,provider_class",
+    [
+        ("anthropic", "ANTHROPIC_API_KEY", AnthropicProvider),
+        ("gemini", "GEMINI_API_KEY", GeminiProvider),
+    ],
+)
+def test_service_factory_selects_configured_provider(
+    monkeypatch, provider_name, key_name, provider_class
+):
+    from app.services import ai_improvement_service as service_module
+
+    provider = Mock()
+    factory = Mock(return_value=provider)
+    monkeypatch.setattr(service_module, provider_class.__name__, factory)
+    service = create_ai_improvement_service({
+        "LLM_PROVIDER": provider_name,
+        key_name: "test-key",
+        "LLM_MODEL": "gemini-3.5-flash-lite" if provider_name == "gemini" else "test-model",
+        "LLM_TIMEOUT_SECONDS": 30,
+    })
+
+    assert service.provider is provider
+    factory.assert_called_once_with(
+        "test-key",
+        "gemini-3.5-flash-lite" if provider_name == "gemini" else "test-model",
+        30,
+    )
+
+
+def test_service_factory_requires_secret_and_model():
+    with pytest.raises(AIConfigurationError):
+        create_ai_improvement_service({"LLM_MODEL": "model"})
+    with pytest.raises(AIConfigurationError):
+        create_ai_improvement_service({"ANTHROPIC_API_KEY": "key"})
+
+
+def test_service_factory_rejects_unknown_provider_and_invalid_timeout():
+    with pytest.raises(AIConfigurationError):
+        create_ai_improvement_service({
+            "LLM_PROVIDER": "unknown",
+            "ANTHROPIC_API_KEY": "key",
+            "LLM_MODEL": "model",
+        })
+    with pytest.raises(AIConfigurationError):
+        create_ai_improvement_service({
+            "ANTHROPIC_API_KEY": "key",
+            "LLM_MODEL": "model",
+            "LLM_TIMEOUT_SECONDS": 0,
+        })

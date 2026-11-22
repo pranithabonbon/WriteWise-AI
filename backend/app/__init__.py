@@ -25,10 +25,12 @@ def create_app(config_class=Config):
     from app.routes.health import health_bp
     from app.routes.analyze import analyze_bp
     from app.routes.upload import upload_bp
+    from app.routes.improve import improve_bp
 
     app.register_blueprint(health_bp, url_prefix="/api")
     app.register_blueprint(analyze_bp, url_prefix="/api")
     app.register_blueprint(upload_bp, url_prefix="/api")
+    app.register_blueprint(improve_bp, url_prefix="/api")
 
     @app.errorhandler(404)
     def not_found(_error):

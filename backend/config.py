@@ -24,6 +24,8 @@ class Config:
     MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "writewise_ai")
     MONGODB_TIMEOUT_MS = int(os.getenv("MONGODB_TIMEOUT_MS", "5000"))
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
     LLM_MODEL = os.getenv("LLM_MODEL", "")
     LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
