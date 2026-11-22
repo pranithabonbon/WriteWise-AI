@@ -17,6 +17,8 @@ class AnalysisService:
     """Run all writing analysis components together."""
 
     def __init__(self):
+        # Initialize analyzers once when AnalysisService is created
+        self.grammar_analyzer = GrammarAnalyzer()
         self.readability_analyzer = ReadabilityAnalyzer()
         self.vocabulary_analyzer = VocabularyAnalyzer()
         self.sentence_analyzer = SentenceComplexityAnalyzer()
@@ -35,30 +37,16 @@ class AnalysisService:
             }
 
         # 1. Grammar analysis
-        grammar_analyzer = GrammarAnalyzer()
-
-        try:
-            grammar_result = grammar_analyzer.analyze(text)
-        finally:
-            try:
-                grammar_analyzer.close()
-            except BaseException:
-                pass
+        grammar_result = self.grammar_analyzer.analyze(text)
 
         # 2. Readability analysis
-        readability_result = (
-            self.readability_analyzer.analyze(text)
-        )
+        readability_result = self.readability_analyzer.analyze(text)
 
         # 3. Vocabulary analysis
-        vocabulary_result = (
-            self.vocabulary_analyzer.analyze(text)
-        )
+        vocabulary_result = self.vocabulary_analyzer.analyze(text)
 
         # 4. Sentence complexity analysis
-        sentence_result = (
-            self.sentence_analyzer.analyze(text)
-        )
+        sentence_result = self.sentence_analyzer.analyze(text)
 
         # Extract the nested results
         readability_metrics = readability_result.get(

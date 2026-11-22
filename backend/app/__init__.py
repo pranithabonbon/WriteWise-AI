@@ -24,9 +24,11 @@ def create_app(config_class=Config):
 
     from app.routes.health import health_bp
     from app.routes.analyze import analyze_bp
+    from app.routes.upload import upload_bp
 
     app.register_blueprint(health_bp, url_prefix="/api")
     app.register_blueprint(analyze_bp, url_prefix="/api")
+    app.register_blueprint(upload_bp, url_prefix="/api")
 
     @app.errorhandler(404)
     def not_found(_error):
@@ -38,7 +40,12 @@ def create_app(config_class=Config):
 
     @app.errorhandler(413)
     def too_large(_error):
-        return jsonify({"error": "File is too large"}), 413
+        max_mb = app.config.get("MAX_UPLOAD_MB", 5)
+        return jsonify({
+            "success": False,
+            "error": "File is too large",
+            "message": f"File is too large. Maximum upload size is {max_mb} MB.",
+        }), 413
 
     @app.errorhandler(500)
     def server_error(_error):
