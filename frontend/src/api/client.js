@@ -26,4 +26,24 @@ export const improveWriting = async (text, tone) => {
     return data;
 };
 
+export const saveWritingAnalysis = async (text, analysis, recommendations) => {
+    const { data } = await client.post("/history", { text, analysis, recommendations }, { timeout: 45000 });
+    return data;
+};
+
+export const getWritingHistory = async () => {
+    const { data } = await client.get("/history");
+    return data;
+};
+
+export const getSavedAnalysis = async (id) => {
+    const { data } = await client.get(`/history/${encodeURIComponent(id)}`);
+    return data;
+};
+
+export const deleteSavedAnalysis = async (id) => {
+    const { data } = await client.delete(`/history/${encodeURIComponent(id)}`);
+    return data;
+};
+
 export default client;

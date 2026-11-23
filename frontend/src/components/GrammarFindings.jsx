@@ -20,7 +20,7 @@ export default function GrammarFindings({ grammar = {}, sourceText = "", canCorr
     return <article className="ww-card p-4 mb-3">
         <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
             <div><h3 className="h5 mb-1">Grammar</h3>{grammar.available === false ? <p className="small text-secondary mb-0">Check unavailable</p> : <p className="small text-secondary mb-0">{grammar.error_count ?? errors.length} issue{(grammar.error_count ?? errors.length) === 1 ? "" : "s"} detected</p>}</div>
-            <button className="btn btn-outline-primary btn-sm" type="button" onClick={onReanalyze} disabled={isAnalyzing}>{isAnalyzing ? "Analyzing…" : "Analyze again"}</button>
+            {onReanalyze && <button className="btn btn-outline-primary btn-sm" type="button" onClick={onReanalyze} disabled={isAnalyzing}>{isAnalyzing ? "Analyzing…" : "Analyze again"}</button>}
         </div>
         {grammar.available === false ? <div className="alert alert-warning mb-0">{grammar.message || "Grammar checking is unavailable right now. Other writing analysis results are still available."}</div> : errors.length === 0 && Number(grammar.error_count) === 0 ? <div className="alert alert-success mb-0">{grammar.message || "No grammar or spelling errors found."}</div> : errors.length === 0 ? <p className="text-secondary mb-0">Error details are not available.</p> : <>
             <div className="d-grid gap-3">

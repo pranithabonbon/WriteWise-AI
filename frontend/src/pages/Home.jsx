@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import ApiStatus from "../components/ApiStatus.jsx";
 import AnalysisDashboard from "../components/AnalysisDashboard.jsx";
-import { analyzeWriting, improveWriting } from "../api/client.js";
+import { buildRecommendations } from "../utils/recommendations.js";
+import { analyzeWriting, improveWriting, saveWritingAnalysis } from "../api/client.js";
 
 const TONES = ["Professional", "Academic", "Formal", "Casual", "Friendly"];
 const SUGGESTION_CATEGORIES = [
@@ -29,6 +31,9 @@ export default function Home() {
     const [correctionEdits, setCorrectionEdits] = useState([]);
     const [manualEdit, setManualEdit] = useState(false);
     const [correctionNotice, setCorrectionNotice] = useState("");
+    const [isSavingAnalysis, setIsSavingAnalysis] = useState(false);
+    const [savedAnalysisId, setSavedAnalysisId] = useState("");
+    const [saveError, setSaveError] = useState("");
     const editorRef = useRef(null);
 
     async function handleAnalyze() {
@@ -44,6 +49,8 @@ export default function Home() {
             if (!response?.success) throw new Error(response?.message || "Analysis could not be completed.");
             setAnalysis(response);
             setAnalysisText(text);
+            setSavedAnalysisId("");
+            setSaveError("");
             setUndoStack([]);
             setCorrectionEdits([]);
             setManualEdit(false);
@@ -52,6 +59,21 @@ export default function Home() {
             setAnalysisError(requestError.response?.data?.message || requestError.message || "We couldn’t analyze this text right now. Please try again.");
         } finally {
             setIsAnalyzing(false);
+        }
+    }
+
+    async function handleSaveAnalysis() {
+        if (!analysis || isSavingAnalysis || savedAnalysisId) return;
+        setIsSavingAnalysis(true);
+        setSaveError("");
+        try {
+            const recommendations = buildRecommendations(analysis).map(([heading, message]) => ({ heading, text: message }));
+            const response = await saveWritingAnalysis(analysisText, analysis, recommendations);
+            setSavedAnalysisId(response.analysis?._id || "saved");
+        } catch (requestError) {
+            setSaveError(requestError.response?.data?.message || requestError.message || "Could not save this analysis.");
+        } finally {
+            setIsSavingAnalysis(false);
         }
     }
 
@@ -130,6 +152,9 @@ export default function Home() {
     return (
         <main className="container py-5 ww-home">
             <header className="mb-4">
+                <nav className="d-flex justify-content-end mb-3" aria-label="Main navigation">
+                    <Link className="btn btn-outline-primary" to="/history">Writing History</Link>
+                </nav>
                 <p className="ww-eyebrow mb-2">A clearer way to write</p>
                 <h1 className="ww-brand display-5 mb-2">WriteWise <span>AI</span></h1>
                 <p className="text-secondary mb-0">
@@ -141,7 +166,7 @@ export default function Home() {
                 <h2 id="editor-title" className="h4 mb-2">Improve your writing</h2>
                 <p className="text-secondary mb-4">
                     Add your text, choose a tone, and get a rewrite with explanations and suggestions.
-                    Your writing is not saved to history.
+                    Your writing is saved to history only when you choose Save Analysis.
                 </p>
                 <form onSubmit={handleSubmit}>
                     <label htmlFor="writing-text" className="form-label fw-semibold">Your text</label>
@@ -207,7 +232,7 @@ export default function Home() {
 
             {analysis && <>
                 {text !== analysisText && <div className="alert alert-info" role="status">Your writing has changed since this analysis. Findings are read-only until you analyze again.</div>}
-                <AnalysisDashboard result={analysis} sourceText={analysisText} canCorrect={!manualEdit} onSelectFinding={selectFinding} onApplyCorrection={applyCorrection} onReanalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
+                <AnalysisDashboard result={analysis} sourceText={analysisText} canCorrect={!manualEdit} onSelectFinding={selectFinding} onApplyCorrection={applyCorrection} onReanalyze={handleAnalyze} isAnalyzing={isAnalyzing} onSave={handleSaveAnalysis} isSaving={isSavingAnalysis} isSaved={Boolean(savedAnalysisId)} saveMessage={savedAnalysisId ? "This analysis is saved in your writing history." : saveError} />
             </>}
 
             {result && (

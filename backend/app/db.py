@@ -64,3 +64,6 @@ def ensure_indexes(db):
     )
     # Find all analyses of a given document
     db.analyses.create_index([("document_id", ASCENDING)], name="by_document")
+    db.writing_history.create_index(
+        [("created_at", DESCENDING)], name="history_recent"
+    )
