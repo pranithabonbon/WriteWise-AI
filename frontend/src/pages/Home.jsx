@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import ApiStatus from "../components/ApiStatus.jsx";
 import AnalysisDashboard from "../components/AnalysisDashboard.jsx";
@@ -24,6 +24,12 @@ export default function Home() {
     const [analysis, setAnalysis] = useState(null);
     const [analysisError, setAnalysisError] = useState("");
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [analysisText, setAnalysisText] = useState("");
+    const [undoStack, setUndoStack] = useState([]);
+    const [correctionEdits, setCorrectionEdits] = useState([]);
+    const [manualEdit, setManualEdit] = useState(false);
+    const [correctionNotice, setCorrectionNotice] = useState("");
+    const editorRef = useRef(null);
 
     async function handleAnalyze() {
         setAnalysisError("");
@@ -37,12 +43,61 @@ export default function Home() {
             const response = await analyzeWriting(text);
             if (!response?.success) throw new Error(response?.message || "Analysis could not be completed.");
             setAnalysis(response);
+            setAnalysisText(text);
+            setUndoStack([]);
+            setCorrectionEdits([]);
+            setManualEdit(false);
         } catch (requestError) {
             setAnalysis(null);
             setAnalysisError(requestError.response?.data?.message || requestError.message || "We couldn’t analyze this text right now. Please try again.");
         } finally {
             setIsAnalyzing(false);
         }
+    }
+
+    function locateFinding(error) {
+        const start = Number(error.offset);
+        const length = Number(error.length);
+        if (!Number.isInteger(start) || !Number.isInteger(length) || start < 0 || length < 1 || start + length > analysisText.length) return null;
+        const shift = correctionEdits.reduce((total, edit) => total + (edit.offset < start ? edit.replacement.length - edit.length : 0), 0);
+        const correctedRange = { start: start + shift, end: start + shift + length };
+        if (correctionEdits.some((edit) => edit.offset === start || (start < edit.offset + edit.length && start + length > edit.offset))) return null;
+        return correctedRange;
+    }
+
+    function selectFinding(error) {
+        const range = locateFinding(error);
+        if (!range || manualEdit) return;
+        const editor = editorRef.current;
+        editor?.focus();
+        editor?.setSelectionRange(range.start, range.end);
+    }
+
+    function applyCorrection(error, replacement) {
+        const range = locateFinding(error);
+        if (!range || manualEdit || typeof replacement !== "string") return;
+        const originalStart = Number(error.offset);
+        const incorrect = analysisText.slice(originalStart, originalStart + Number(error.length));
+        if (!incorrect || text.slice(range.start, range.end) !== incorrect || (error.context && !error.context.includes(incorrect))) return;
+        const updated = `${text.slice(0, range.start)}${replacement}${text.slice(range.end)}`;
+        setUndoStack((stack) => [...stack, text]);
+        setCorrectionEdits((edits) => [...edits, { offset: originalStart, length: Number(error.length), replacement }]);
+        setText(updated);
+        setCorrectionNotice(`Correction applied: “${incorrect}” → “${replacement}”.`);
+        requestAnimationFrame(() => {
+            const editor = editorRef.current;
+            if (!editor) return;
+            editor.focus();
+            editor.setSelectionRange(range.start, range.start + replacement.length);
+        });
+    }
+
+    function undoCorrection() {
+        if (!undoStack.length) return;
+        setText(undoStack[undoStack.length - 1]);
+        setUndoStack((stack) => stack.slice(0, -1));
+        setCorrectionEdits((edits) => edits.slice(0, -1));
+        setCorrectionNotice("Last grammar correction undone.");
     }
 
     async function handleSubmit(event) {
@@ -91,13 +146,16 @@ export default function Home() {
                 <form onSubmit={handleSubmit}>
                     <label htmlFor="writing-text" className="form-label fw-semibold">Your text</label>
                     <textarea
+                        ref={editorRef}
                         id="writing-text"
                         className="form-control ww-writing-input"
                         value={text}
                         onChange={(event) => {
                             setText(event.target.value);
-                            setAnalysis(null);
-                            setAnalysisError("");
+                            setManualEdit(true);
+                            setUndoStack([]);
+                            setCorrectionEdits([]);
+                            setCorrectionNotice("");
                         }}
                         maxLength={MAX_CHARACTERS}
                         rows={8}
@@ -137,12 +195,20 @@ export default function Home() {
                             {isAnalyzing ? <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true" />Analyzing…</> : "Analyze Writing"}
                         </button>
                     </div>
+                    {undoStack.length > 0 && <div className="d-flex flex-wrap align-items-center gap-3 mt-3">
+                        <button className="btn btn-outline-secondary" type="button" onClick={undoCorrection}>Undo last correction</button>
+                        <span className="small text-secondary">{undoStack.length} correction{undoStack.length === 1 ? "" : "s"} available to undo</span>
+                    </div>}
+                    {correctionNotice && <p className="small text-success mt-3 mb-0" role="status">{correctionNotice} Analyze again to refresh your findings and writing metrics.</p>}
                 </form>
 
                 {(error || analysisError) && <div className="alert alert-danger mt-4 mb-0" role="alert">{error || analysisError}</div>}
             </section>
 
-            {analysis && <AnalysisDashboard result={analysis} sourceText={text} />}
+            {analysis && <>
+                {text !== analysisText && <div className="alert alert-info" role="status">Your writing has changed since this analysis. Findings are read-only until you analyze again.</div>}
+                <AnalysisDashboard result={analysis} sourceText={analysisText} canCorrect={!manualEdit} onSelectFinding={selectFinding} onApplyCorrection={applyCorrection} onReanalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
+            </>}
 
             {result && (
                 <section className="ww-results mb-4" aria-labelledby="results-title" aria-live="polite">

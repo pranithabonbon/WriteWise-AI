@@ -89,6 +89,11 @@ body {
 .ww-metric .h5 { overflow-wrap: anywhere; }
 .ww-insight { color: var(--ww-ink); }
 .ww-error { border-left: 3px solid #dc6b67; background: #fffafa; border-radius: 5px; padding: .9rem 1rem; }
+.ww-error-interactive { transition: border-color .15s ease, background-color .15s ease; }
+.ww-error-interactive:hover { border-left-color: var(--ww-accent); background: #f7fbfb; }
+.ww-finding-button { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.ww-finding-button:not(:disabled) { cursor: pointer; }
+.ww-finding-button:focus-visible { outline: 2px solid var(--ww-accent); outline-offset: 3px; }
 .ww-context { white-space: pre-wrap; overflow-wrap: anywhere; color: #39474c; }
 .ww-context mark { background: #ffe39a; padding: 0 .08rem; }
 .ww-chip-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
