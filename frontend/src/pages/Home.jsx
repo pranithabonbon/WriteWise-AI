@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import ApiStatus from "../components/ApiStatus.jsx";
-import { improveWriting } from "../api/client.js";
+import AnalysisDashboard from "../components/AnalysisDashboard.jsx";
+import { analyzeWriting, improveWriting } from "../api/client.js";
 
 const TONES = ["Professional", "Academic", "Formal", "Casual", "Friendly"];
 const SUGGESTION_CATEGORIES = [
@@ -20,6 +21,29 @@ export default function Home() {
     const [error, setError] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [analysis, setAnalysis] = useState(null);
+    const [analysisError, setAnalysisError] = useState("");
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    async function handleAnalyze() {
+        setAnalysisError("");
+        if (!text.trim()) {
+            setAnalysisError("Add some text before starting an analysis.");
+            return;
+        }
+        setAnalysis(null);
+        setIsAnalyzing(true);
+        try {
+            const response = await analyzeWriting(text);
+            if (!response?.success) throw new Error(response?.message || "Analysis could not be completed.");
+            setAnalysis(response);
+        } catch (requestError) {
+            setAnalysis(null);
+            setAnalysisError(requestError.response?.data?.message || requestError.message || "We couldn’t analyze this text right now. Please try again.");
+        } finally {
+            setIsAnalyzing(false);
+        }
+    }
 
     async function handleSubmit(event) {
         event.preventDefault();
@@ -70,7 +94,11 @@ export default function Home() {
                         id="writing-text"
                         className="form-control ww-writing-input"
                         value={text}
-                        onChange={(event) => setText(event.target.value)}
+                        onChange={(event) => {
+                            setText(event.target.value);
+                            setAnalysis(null);
+                            setAnalysisError("");
+                        }}
                         maxLength={MAX_CHARACTERS}
                         rows={8}
                         placeholder="Paste or write a paragraph here…"
@@ -104,10 +132,17 @@ export default function Home() {
                             </button>
                         </div>
                     </div>
+                    <div className="d-grid mt-3">
+                        <button className="btn btn-outline-primary btn-lg" type="button" onClick={handleAnalyze} disabled={isAnalyzing || !text.trim()}>
+                            {isAnalyzing ? <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true" />Analyzing…</> : "Analyze Writing"}
+                        </button>
+                    </div>
                 </form>
 
-                {error && <div className="alert alert-danger mt-4 mb-0" role="alert">{error}</div>}
+                {(error || analysisError) && <div className="alert alert-danger mt-4 mb-0" role="alert">{error || analysisError}</div>}
             </section>
+
+            {analysis && <AnalysisDashboard result={analysis} sourceText={text} />}
 
             {result && (
                 <section className="ww-results mb-4" aria-labelledby="results-title" aria-live="polite">

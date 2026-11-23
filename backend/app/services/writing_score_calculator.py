@@ -16,10 +16,13 @@ class WritingScoreCalculator:
         # -----------------------------
         # 1. Grammar score (40%)
         # -----------------------------
-        error_count = grammar.get("error_count", 0)
+        grammar_available = grammar.get("available", True) is not False
+        error_count = grammar.get("error_count", 0) or 0
 
-        # Deduct 5 points per detected error
-        grammar_score = max(0, 100 - (error_count * 5))
+        # Do not treat an unavailable grammar service as a perfect score.
+        grammar_score = (
+            max(0, 100 - (error_count * 5)) if grammar_available else None
+        )
 
         # -----------------------------
         # 2. Readability score (25%)
@@ -58,11 +61,34 @@ class WritingScoreCalculator:
         # -----------------------------
         # Weighted total
         # -----------------------------
+        weighted_components = [
+            (grammar_score, 0.40),
+            (readability_score, 0.25),
+            (vocabulary_score, 0.20),
+            (sentence_score, 0.15),
+        ]
+        available_components = [
+            (score, weight) for score, weight in weighted_components
+            if score is not None
+        ]
+        available_weight = sum(weight for _, weight in available_components)
+        component_weights = {
+            "grammar": 0.40,
+            "readability": 0.25,
+            "vocabulary": 0.20,
+            "sentence_structure": 0.15,
+        }
+        component_values = {
+            "grammar": grammar_score,
+            "readability": readability_score,
+            "vocabulary": vocabulary_score,
+            "sentence_structure": sentence_score,
+        }
         overall_score = (
-            grammar_score * 0.40
-            + readability_score * 0.25
-            + vocabulary_score * 0.20
-            + sentence_score * 0.15
+            sum(score * weight for score, weight in available_components)
+            / available_weight
+            if available_weight
+            else 0
         )
 
         overall_score = round(
@@ -87,7 +113,7 @@ class WritingScoreCalculator:
             "writing_score": overall_score,
             "grade": grade,
             "component_scores": {
-                "grammar": round(grammar_score, 2),
+                "grammar": round(grammar_score, 2) if grammar_score is not None else None,
                 "readability": round(
                     readability_score, 2
                 ),
@@ -104,5 +130,16 @@ class WritingScoreCalculator:
                 "vocabulary": 20,
                 "sentence_structure": 15
             },
-            "message": "Writing score calculated successfully."
+            "effective_weights": {
+                name: round(component_weights[name] / available_weight * 100, 2)
+                if value is not None and available_weight
+                else 0
+                for name, value in component_values.items()
+            },
+            "message": (
+                "Writing score calculated without grammar analysis because "
+                "grammar checking is unavailable."
+                if not grammar_available
+                else "Writing score calculated successfully."
+            )
         }

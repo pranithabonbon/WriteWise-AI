@@ -12,6 +12,11 @@ export const getHealth = async () => {
     return data;
 };
 
+export const analyzeWriting = async (text) => {
+    const { data } = await client.post("/analyze", { text }, { timeout: 45000 });
+    return data;
+};
+
 export const improveWriting = async (text, tone) => {
     const { data } = await client.post(
         "/improve",

@@ -12,6 +12,24 @@ def test_health_returns_ok(client):
     assert data["service"] == "WriteWise AI API"
 
 
+def test_health_does_not_initialize_language_tool(client, monkeypatch):
+    calls = []
+
+    def unexpected_initialization(_language):
+        calls.append(True)
+        raise AssertionError("Health checks must not start LanguageTool")
+
+    monkeypatch.setattr(
+        "app.services.grammar_analyzer.language_tool_python.LanguageTool",
+        unexpected_initialization,
+    )
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert calls == []
+
+
 def test_health_reports_database_not_configured():
     class NoDbConfig(TestConfig):
         MONGODB_URI = ""
