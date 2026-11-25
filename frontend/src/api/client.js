@@ -1,8 +1,17 @@
 import axios from "axios";
 
+const defaultApiBaseUrl = import.meta.env.DEV
+    ? "/api"
+    : "https://writewise-ai-oz38.onrender.com/api";
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl;
+const apiBaseUrl = configuredApiBaseUrl.replace(/\/+$/, "");
+const normalizedApiBaseUrl = /\/api$/i.test(apiBaseUrl)
+    ? apiBaseUrl
+    : `${apiBaseUrl}/api`;
+
 // One configured Axios instance: every backend call goes through here.
 const client = axios.create({
-    baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
+    baseURL: normalizedApiBaseUrl,
     timeout: 15000,
     headers: { "Content-Type": "application/json" },
 });

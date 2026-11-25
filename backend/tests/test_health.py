@@ -14,6 +14,22 @@ def test_health_returns_ok(client):
     assert data["service"] == "WriteWise AI API"
 
 
+def test_health_route_requires_api_prefix(client):
+    assert client.get("/health").status_code == 404
+    assert client.get("/").status_code == 404
+
+
+def test_configured_cors_origin_is_allowed():
+    class CorsConfig(TestConfig):
+        CORS_ORIGINS = ["https://writewise.example"]
+        MONGO_CLIENT = mongomock.MongoClient()
+
+    response = create_app(CorsConfig).test_client().get(
+        "/api/health", headers={"Origin": "https://writewise.example"}
+    )
+    assert response.headers["Access-Control-Allow-Origin"] == "https://writewise.example"
+
+
 def test_health_does_not_initialize_language_tool(client, monkeypatch):
     calls = []
 
