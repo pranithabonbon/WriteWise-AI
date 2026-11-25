@@ -11,7 +11,8 @@ class WritingScoreCalculator:
         grammar,
         readability,
         vocabulary,
-        sentence_complexity
+        sentence_complexity,
+        context="General",
     ):
         # -----------------------------
         # 1. Grammar score (40%)
@@ -84,21 +85,23 @@ class WritingScoreCalculator:
             "vocabulary": vocabulary_score,
             "sentence_structure": sentence_score,
         }
+        context_limited = context in ("Professional", "Academic")
         overall_score = (
-            sum(score * weight for score, weight in available_components)
-            / available_weight
-            if available_weight
-            else 0
+            None if context_limited else (
+                sum(score * weight for score, weight in available_components)
+                / available_weight if available_weight else 0
+            )
         )
 
-        overall_score = round(
-            max(0, min(100, overall_score)), 2
-        )
+        if overall_score is not None:
+            overall_score = round(max(0, min(100, overall_score)), 2)
 
         # -----------------------------
         # Grade
         # -----------------------------
-        if overall_score >= 90:
+        if context_limited:
+            grade = "Not scored"
+        elif overall_score >= 90:
             grade = "Excellent"
         elif overall_score >= 80:
             grade = "Very Good"
@@ -137,9 +140,11 @@ class WritingScoreCalculator:
                 for name, value in component_values.items()
             },
             "message": (
-                "Writing score calculated without grammar analysis because "
-                "grammar checking is unavailable."
-                if not grammar_available
-                else "Writing score calculated successfully."
-            )
+                "No combined score is shown for professional or academic writing. Readability, vocabulary, and sentence metrics are estimates and may reflect necessary terminology or sentence structure."
+                if context_limited else (
+                    "Writing score calculated without grammar analysis because grammar checking is unavailable."
+                    if not grammar_available else "Automated writing estimate calculated successfully; use it as guidance, not a definitive judgment."
+                )
+            ),
+            "score_scope": "component_estimates_only" if context_limited else "combined_estimate",
         }

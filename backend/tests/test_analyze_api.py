@@ -39,7 +39,7 @@ def test_analyze_valid_text(client, monkeypatch):
     monkeypatch.setattr(
         analyze.analysis_service,
         "analyze",
-        lambda text: fake_result
+        lambda text, context="General": {**fake_result, "context": context}
     )
 
     response = client.post(
@@ -59,6 +59,21 @@ def test_analyze_valid_text(client, monkeypatch):
     assert "vocabulary" in data
     assert "sentence_complexity" in data
     assert "score" in data
+    assert data["context"] == "General"
+
+
+def test_analyze_accepts_writing_context(client, monkeypatch):
+    from app.routes import analyze
+
+    monkeypatch.setattr(analyze.analysis_service, "analyze", lambda text, context="General": {"success": True, "context": context})
+    response = client.post("/api/analyze", json={"text": "The proposal explains the research.", "context": "Academic"})
+    assert response.status_code == 200
+    assert response.get_json()["context"] == "Academic"
+
+
+def test_analyze_rejects_unknown_context(client):
+    response = client.post("/api/analyze", json={"text": "Some writing.", "context": "Legal"})
+    assert response.status_code == 400
 
 
 def test_analyze_empty_text(client):

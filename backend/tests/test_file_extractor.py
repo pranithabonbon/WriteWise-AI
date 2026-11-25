@@ -83,6 +83,19 @@ def test_extract_pdf_all_pages():
     assert result["character_count"] == len(result["text"])
 
 
+def test_pdf_line_wrap_hyphenation_is_joined_and_real_compounds_preserved():
+    extracted = FileExtractor._dehyphenate_pdf_text(
+        "The au-\nthentication service supports profession-\nals.\n\n"
+        "A well-\nknown user can use e-\nmail and machine-\nlearning."
+    )
+    assert "authentication" in extracted
+    assert "professionals" in extracted
+    assert "well-\nknown" in extracted
+    assert "e-\nmail" in extracted
+    assert "machine-\nlearning" in extracted
+    assert "\n\n" in extracted
+
+
 def test_extract_docx_paragraphs_and_tables():
     result = FileExtractor().extract(make_docx_bytes(), "essay.docx")
 

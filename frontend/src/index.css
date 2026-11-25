@@ -57,6 +57,12 @@ body {
   resize: vertical;
 }
 
+.ww-editor-dropzone { position: relative; border-radius: 8px; transition: background-color .15s ease, box-shadow .15s ease; }
+.ww-editor-dropzone.is-active { background: #eef8f8; box-shadow: 0 0 0 3px var(--ww-accent); }
+.ww-drop-active { border-color: var(--ww-accent); }
+.ww-drop-hint { position: absolute; inset: 0; display: grid; place-items: center; border: 2px dashed var(--ww-accent); border-radius: 8px; background: rgb(238 248 248 / 88%); color: var(--ww-ink); font-weight: 700; pointer-events: none; }
+.ww-uploaded-name { max-width: min(45vw, 260px); }
+
 .ww-rewrite {
   white-space: pre-wrap;
   line-height: 1.75;
@@ -91,6 +97,8 @@ body {
 .ww-error { border-left: 3px solid #dc6b67; background: #fffafa; border-radius: 5px; padding: .9rem 1rem; }
 .ww-error-interactive { transition: border-color .15s ease, background-color .15s ease; }
 .ww-error-interactive:hover { border-left-color: var(--ww-accent); background: #f7fbfb; }
+.ww-error-possible_error { border-left-color: #d3a34c; background: #fffdf7; }
+.ww-error-style_suggestion { border-left-color: #7d8f9d; background: #f8fafb; }
 .ww-finding-button { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
 .ww-finding-button:not(:disabled) { cursor: pointer; }
 .ww-finding-button:focus-visible { outline: 2px solid var(--ww-accent); outline-offset: 3px; }

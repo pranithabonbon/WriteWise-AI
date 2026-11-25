@@ -11,13 +11,14 @@ export default function ScoreOverview({ score = {} }) {
         <article className="ww-card p-4 p-md-5 mb-3">
             <div className="row align-items-center g-4">
                 <div className="col-12 col-md-4 text-center">
-                    <div className="ww-score-ring mx-auto" style={{ "--score-progress": `${progress}%` }} role="img" aria-label={`Overall score ${total ?? "not available"} out of 100`}>
+                    <div className="ww-score-ring mx-auto" style={{ "--score-progress": `${progress}%` }} role="img" aria-label={total === null ? "Overall score not calculated for this writing context" : `Automated writing estimate ${total} out of 100`}>
                         <div className="ww-score-ring-inner">
                             <strong>{total === null ? "—" : total}</strong><span>/ 100</span>
                         </div>
                     </div>
                     <p className="h5 mt-3 mb-1">{score.grade || "Score unavailable"}</p>
-                    <p className="small text-secondary mb-0">Automated writing-quality estimate, not an official academic grade.</p>
+                    <p className="small text-secondary mb-0">Automated indicators are estimates, not definitive judgments of writing quality.</p>
+                    {score.message && <p className="small text-secondary mt-2 mb-0">{score.message}</p>}
                     {score.component_scores?.grammar == null && <p className="small text-secondary mt-2 mb-0">Grammar was unavailable, so the other component scores were rescaled.</p>}
                 </div>
                 <div className="col-12 col-md-8">

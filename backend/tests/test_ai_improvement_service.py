@@ -32,6 +32,7 @@ def valid_result():
             "original_text": "The team complete the report.",
             "corrected_text": "The team completed the report.",
             "explanation": "Use the past tense for an action that is finished.",
+            "correction_type": "mandatory",
         }],
         "suggestions": {category: [] for category in SUGGESTION_CATEGORIES},
     }
@@ -42,8 +43,8 @@ class FakeProvider:
         self.result = result or valid_result()
         self.calls = []
 
-    def generate_improvement(self, text, tone):
-        self.calls.append((text, tone))
+    def generate_improvement(self, text, tone, context="General"):
+        self.calls.append((text, tone, context))
         return self.result
 
 
@@ -52,7 +53,62 @@ def test_service_returns_validated_result_and_passes_tone():
     result = AIImprovementService(provider).improve("The team complete it.", "Academic")
 
     assert result == valid_result()
-    assert provider.calls == [("The team complete it.", "Academic")]
+    assert provider.calls == [("The team complete it.", "Academic", "General")]
+
+
+def test_service_passes_context_and_preserves_proper_names_and_numbers():
+    provider = FakeProvider({**valid_result(), "rewrite": "Maya said the PostgreSQL API returned 200 results."})
+    result = AIImprovementService(provider).improve(
+        "Maya said the PostgreSQL API returns 200 results.", "Professional", "Academic"
+    )
+    assert result["rewrite"] == "Maya said the PostgreSQL API returned 200 results."
+    assert provider.calls == [("Maya said the PostgreSQL API returns 200 results.", "Professional", "Academic")]
+
+
+def test_service_rejects_rewrite_that_drops_protected_terms_or_numbers():
+    provider = FakeProvider({**valid_result(), "rewrite": "The database returned many results."})
+    with pytest.raises(InvalidAIResponseError, match="preserve important names"):
+        AIImprovementService(provider).improve("Maya used PostgreSQL API v2 in 2026.")
+
+
+def test_service_preserves_degree_cgpa_project_technical_terms_and_event_ids():
+    original = (
+        "Example Candidate completed a B.Tech in Computer Science with a CGPA of 7.42. "
+        "The example project is a Microsoft Sentinel SOC Investigation Lab using KQL "
+        "and Windows Event IDs 4624, 4625, and 4720."
+    )
+    rewrite = (
+        "Example Candidate earned a B.Tech degree in Computer Science with a CGPA of 7.42. "
+        "The project is a SOC Investigation Lab in Microsoft Sentinel using KQL "
+        "and Windows Event IDs 4624, 4625, and 4720."
+    )
+    result = AIImprovementService(FakeProvider({
+        **valid_result(), "rewrite": rewrite,
+    })).improve(original)
+    assert result["rewrite"] == rewrite
+
+
+@pytest.mark.parametrize("rewrite", [
+    "Example Candidate completed a B.Tech in Computer Science with a CGPA of 7.24.",
+    "Example Candidate completed a B.Tech in Computer Science with a CGPA of 7.42. The example project uses KQL and Windows Event IDs 4624 and 4625.",
+    "Example Candidate completed a B.Tech in Computer Science with a CGPA of 7.42. The lab uses KQL and Windows Event IDs 4624, 4625, and 4720.",
+])
+def test_service_rejects_changed_or_omitted_factual_details(rewrite):
+    original = (
+        "Example Candidate completed a B.Tech in Computer Science with a CGPA of 7.42. "
+        "The example project is a Microsoft Sentinel SOC Investigation Lab using KQL "
+        "and Windows Event IDs 4624, 4625, and 4720."
+    )
+    with pytest.raises(InvalidAIResponseError, match="important names, facts, or numbers"):
+        AIImprovementService(FakeProvider({**valid_result(), "rewrite": rewrite})).improve(original)
+
+
+def test_already_good_text_can_be_returned_unchanged():
+    original = "The application processes data efficiently."
+    result = AIImprovementService(FakeProvider({
+        **valid_result(), "rewrite": original, "grammar_explanations": [],
+    })).improve(original)
+    assert result["rewrite"] == original
 
 
 @pytest.mark.parametrize("text", ["", "  \n", None])
@@ -109,6 +165,7 @@ def test_provider_uses_timeout_and_forced_structured_tool(monkeypatch):
         api_key="test-key", timeout=7, max_retries=0
     )
     kwargs = client.messages.create.call_args.kwargs
+    assert "If the original is already clear and correct, return it unchanged" in kwargs["system"]
     assert kwargs["tool_choice"] == {
         "type": "tool", "name": AnthropicProvider.TOOL_NAME
     }
@@ -137,7 +194,7 @@ def test_provider_maps_errors_without_exposing_details(monkeypatch, provider_err
 
 
 def test_provider_logs_safe_anthropic_error_diagnostics(monkeypatch, caplog):
-    secret = "sk-ant-test-secret"
+    secret = "test-anthropic-key-placeholder"
     error = anthropic.APIStatusError(
         "invalid request",
         response=Mock(status_code=404, headers={"request-id": "req_test"}),
@@ -176,6 +233,7 @@ def test_gemini_provider_uses_sdk_json_schema_and_timeout(monkeypatch):
     kwargs = client.models.generate_content.call_args.kwargs
     assert kwargs["model"] == "gemini-3.5-flash-lite"
     assert "Friendly tone" in kwargs["contents"]
+    assert "If the original is already clear and correct, return it unchanged" in kwargs["contents"]
     assert kwargs["config"].response_mime_type == "application/json"
     assert kwargs["config"].response_schema["required"] == [
         "rewrite", "grammar_explanations", "suggestions"
@@ -191,7 +249,7 @@ def test_gemini_provider_uses_sdk_json_schema_and_timeout(monkeypatch):
     ],
 )
 def test_gemini_provider_maps_api_errors_safely(monkeypatch, caplog, code, expected):
-    secret = "AIza123456789012345678901234567890"
+    secret = "test-google-key-placeholder"
     error = gemini_errors.APIError(
         code,
         {"error": {"message": "provider detail " + secret}},

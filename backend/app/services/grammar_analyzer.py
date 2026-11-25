@@ -5,21 +5,39 @@ import os
 import threading
 from pathlib import Path
 
-# language_tool_python 2.9.5 defaults to downloading the 6.8-SNAPSHOT build.
-# Point it directly at the existing 6.9-SNAPSHOT cache so its updater cannot
-# download another build on startup or on the first analysis request.
-_cached_install = Path(
-    os.environ.get(
-        "WRITEWISE_LANGUAGETOOL_JAR_DIR",
-        Path.home() / ".cache" / "language_tool_python" / "LanguageTool-6.9-SNAPSHOT",
-    )
+# Reuse a known local cache when it exists. Clean hosts (including Render) can
+# otherwise let language_tool_python download its pinned-by-package default
+# into LTP_PATH; setting LTP_JAR_DIR_PATH to a nonexistent local path disables
+# that downloader and makes grammar checking unavailable permanently.
+_default_cache = Path.home() / ".cache" / "language_tool_python"
+_cache_root = Path(os.environ.get("LTP_PATH", _default_cache)).expanduser()
+_configured_install = os.environ.get("WRITEWISE_LANGUAGETOOL_JAR_DIR")
+_preferred_install = Path(
+    _configured_install or _cache_root / "LanguageTool-6.9-SNAPSHOT"
 ).expanduser()
-os.environ.setdefault("LTP_PATH", str(_cached_install.parent))
-os.environ.setdefault("LTP_JAR_DIR_PATH", str(_cached_install))
+if _configured_install:
+    _cached_install = _preferred_install
+elif _preferred_install.is_dir():
+    _cached_install = _preferred_install
+else:
+    _cached_install = next(iter(sorted(
+        (path for path in _cache_root.glob("LanguageTool-*") if path.is_dir()),
+        reverse=True,
+    )), None)
+os.environ.setdefault("LTP_PATH", str(_cache_root))
+if _cached_install is not None:
+    os.environ.setdefault("LTP_JAR_DIR_PATH", str(_cached_install))
 
 import language_tool_python
 
 logger = logging.getLogger(__name__)
+TECHNICAL_TERMS = {
+    "anthropic", "api", "cuda", "docker", "flask", "gemini", "graphql",
+    "http", "https", "javascript", "jwt", "kafka", "kubernetes",
+    "languagetool", "mongodb", "nltk", "nginx", "oauth", "pymongo",
+    "pymupdf", "postgresql", "python", "react", "redis", "rest", "sqlite",
+    "textstat", "typescript", "vite", "writewise",
+}
 
 
 class GrammarAnalyzer:
@@ -44,11 +62,11 @@ class GrammarAnalyzer:
             if cls._shared_tool is not None and cls._shared_language == language:
                 return cls._shared_tool
 
-            jar_dir = Path(os.environ["LTP_JAR_DIR_PATH"])
-            if not jar_dir.is_dir():
+            jar_dir = os.environ.get("LTP_JAR_DIR_PATH")
+            if jar_dir and not Path(jar_dir).is_dir():
                 raise FileNotFoundError(f"LanguageTool cache directory was not found: {jar_dir}")
-
-            # LTP_JAR_DIR_PATH makes language_tool_python skip its downloader.
+            # Without an explicit cache, language_tool_python downloads into
+            # LTP_PATH. Production images warm that cache during the build.
             tool = language_tool_python.LanguageTool(language)
             cls._shared_tool = tool
             cls._shared_language = language
@@ -66,8 +84,13 @@ class GrammarAnalyzer:
                 except Exception:
                     logger.debug("Error closing failed LanguageTool instance", exc_info=True)
 
-    def analyze(self, text):
-        """Return grammar findings, or an unavailable result without failing analysis."""
+    def analyze(self, text, context="General"):
+        """Return grammar findings independent of context, or an unavailable result.
+
+        LanguageTool's grammar and spelling classifications describe rule matches,
+        not writing style. Context is accepted for a consistent analyzer interface;
+        context-specific style guidance is produced by the recommendation service.
+        """
         if not isinstance(text, str):
             raise TypeError("Text must be a string.")
 
@@ -75,6 +98,9 @@ class GrammarAnalyzer:
             return {
                 "available": True,
                 "error_count": 0,
+                "possible_error_count": 0,
+                "style_suggestion_count": 0,
+                "ignored_name_or_term_count": 0,
                 "errors": [],
                 "message": "No text provided for analysis.",
             }
@@ -93,6 +119,9 @@ class GrammarAnalyzer:
                 return {
                     "available": False,
                     "error_count": None,
+                    "possible_error_count": 0,
+                    "style_suggestion_count": 0,
+                    "ignored_name_or_term_count": 0,
                     "errors": [],
                     "message": (
                         "Grammar checking is unavailable right now. "
@@ -100,29 +129,68 @@ class GrammarAnalyzer:
                     ),
                 }
 
-        errors = [
-            {
+        errors = []
+        ignored_name_or_term_count = 0
+        for match in matches:
+            issue_type = str(getattr(match, "ruleIssueType", "") or "").lower()
+            raw_category = getattr(match, "category", "")
+            category = getattr(raw_category, "name", raw_category)
+            if issue_type == "style" or str(category).lower() == "style":
+                classification = "style_suggestion"
+            elif issue_type == "grammar":
+                classification = "grammar_error"
+            else:
+                # Spelling, typography, and unknown rules need human review;
+                # LanguageTool alone cannot reliably distinguish names/terms.
+                classification = "possible_error"
+
+            offset = int(getattr(match, "offset", 0) or 0)
+            length = int(getattr(match, "errorLength", 0) or 0)
+            excerpt = text[offset:offset + length]
+            if (issue_type in ("misspelling", "typographical")
+                    and self._likely_name_or_technical_term(text, offset, excerpt)):
+                ignored_name_or_term_count += 1
+                continue
+            errors.append({
                 "message": match.message,
                 "rule_id": match.ruleId,
-                "category": match.category,
-                "error_type": match.ruleIssueType,
-                "offset": match.offset,
-                "length": match.errorLength,
+                "category": str(category),
+                "error_type": issue_type,
+                "classification": classification,
+                "confidence": "review" if classification == "possible_error" else "rule-based",
+                "offset": offset,
+                "length": length,
                 "context": match.context,
                 "suggestions": match.replacements[:5],
-            }
-            for match in matches
-        ]
+                "matched_text": excerpt,
+            })
+
+        definite_count = sum(item["classification"] == "grammar_error" for item in errors)
+        possible_count = sum(item["classification"] == "possible_error" for item in errors)
+        style_count = sum(item["classification"] == "style_suggestion" for item in errors)
         return {
             "available": True,
-            "error_count": len(errors),
+            "error_count": definite_count,
+            "possible_error_count": possible_count,
+            "style_suggestion_count": style_count,
+            "ignored_name_or_term_count": ignored_name_or_term_count,
             "errors": errors,
-            "message": (
-                "Grammar analysis completed successfully."
-                if errors
-                else "No grammar or spelling errors found."
-            ),
+            "message": f"Grammar check found {definite_count} likely grammar error(s), {possible_count} item(s) to review, and {style_count} style suggestion(s).",
         }
+
+    @staticmethod
+    def _likely_name_or_technical_term(text, offset, excerpt):
+        token = excerpt.strip(".,:;!?()[]{}\"'“”‘’")
+        if not token:
+            return False
+        if token.lower() in TECHNICAL_TERMS:
+            return True
+        if any(character.isdigit() for character in token) or token.isupper() or ("-" in token and any(character.isupper() for character in token)):
+            return True
+        # A title-cased word mid-sentence is more likely a name than a typo.
+        prefix = text[:offset].rstrip()
+        begins_sentence = not prefix or prefix[-1] in ".!?\n"
+        return bool(not begins_sentence and token[:1].isupper() and token[1:].islower())
 
     def close(self):
         """Keep the shared LanguageTool process alive between analyses."""

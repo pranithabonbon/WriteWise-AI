@@ -12,15 +12,15 @@ export const getHealth = async () => {
     return data;
 };
 
-export const analyzeWriting = async (text) => {
-    const { data } = await client.post("/analyze", { text }, { timeout: 45000 });
+export const analyzeWriting = async (text, context = "General") => {
+    const { data } = await client.post("/analyze", { text, context }, { timeout: 45000 });
     return data;
 };
 
-export const improveWriting = async (text, tone) => {
+export const improveWriting = async (text, tone, context = "General") => {
     const { data } = await client.post(
         "/improve",
-        { text, tone },
+        { text, tone, context },
         { timeout: 45000 },
     );
     return data;
@@ -43,6 +43,16 @@ export const getSavedAnalysis = async (id) => {
 
 export const deleteSavedAnalysis = async (id) => {
     const { data } = await client.delete(`/history/${encodeURIComponent(id)}`);
+    return data;
+};
+
+export const uploadWritingFile = async (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const { data } = await client.post("/upload", formData, {
+        timeout: 45000,
+        headers: { "Content-Type": "multipart/form-data" },
+    });
     return data;
 };
 

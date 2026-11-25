@@ -16,6 +16,7 @@ export default function AnalysisDashboard({ result, sourceText, canCorrect, onSe
                         {isSaving ? <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true" />Saving…</> : isSaved ? "Saved to history" : "Save Analysis"}
                     </button>}
                 </div>
+                {result.context && <p className="small text-secondary mt-2 mb-0">Writing context: {result.context}</p>}
                 {saveMessage && <p className="small text-success mt-2 mb-0" role="status">{saveMessage}</p>}
             </div>
             <ScoreOverview score={result.score} />

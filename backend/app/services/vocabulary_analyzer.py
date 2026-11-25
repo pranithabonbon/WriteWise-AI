@@ -78,6 +78,31 @@ class VocabularyAnalyzer:
             if count > 1
         }
 
+        sentence_words = [
+            [word for word in re.findall(r"[a-z]+", sentence) if word not in self.STOP_WORDS]
+            for sentence in re.split(r"[.!?;\n]+", text.lower())
+        ]
+        sentence_words = [words_in_sentence for words_in_sentence in sentence_words if words_in_sentence]
+        sentence_indexes = {}
+        repeated_within_sentence = set()
+        for sentence_index, words_in_sentence in enumerate(sentence_words):
+            sentence_counts = Counter(words_in_sentence)
+            for word, count in sentence_counts.items():
+                sentence_indexes.setdefault(word, []).append(sentence_index)
+                if count > 1:
+                    repeated_within_sentence.add(word)
+        repetition_patterns = {
+            word: {
+                "count": meaningful_frequency[word],
+                "sentences": indexes,
+                "within_sentence": word in repeated_within_sentence,
+            }
+            for word, indexes in sentence_indexes.items()
+            if meaningful_frequency[word] >= 3
+            and (word in repeated_within_sentence
+                 or any(right - left <= 1 for left, right in zip(indexes, indexes[1:])))
+        }
+
         # Most frequently used meaningful words
         most_common_words = meaningful_frequency.most_common(5)
 
@@ -97,6 +122,7 @@ class VocabularyAnalyzer:
                 "type_token_ratio": round(ttr, 3),
                 "vocabulary_score": vocabulary_score,
                 "repeated_words": repeated_words,
+                "repetition_patterns": repetition_patterns,
                 "most_common_words": [
                     {
                         "word": word,

@@ -4,9 +4,10 @@ import { Link } from "react-router-dom";
 import ApiStatus from "../components/ApiStatus.jsx";
 import AnalysisDashboard from "../components/AnalysisDashboard.jsx";
 import { buildRecommendations } from "../utils/recommendations.js";
-import { analyzeWriting, improveWriting, saveWritingAnalysis } from "../api/client.js";
+import { analyzeWriting, improveWriting, saveWritingAnalysis, uploadWritingFile } from "../api/client.js";
 
 const TONES = ["Professional", "Academic", "Formal", "Casual", "Friendly"];
+const WRITING_CONTEXTS = ["General", "Professional", "Academic", "Creative", "Email", "Casual"];
 const SUGGESTION_CATEGORIES = [
     "Readability",
     "Vocabulary",
@@ -14,11 +15,20 @@ const SUGGESTION_CATEGORIES = [
     "Repetition",
 ];
 const MAX_CHARACTERS = 12000;
+const configuredUploadLimit = Number(import.meta.env.VITE_MAX_UPLOAD_MB || 5);
+const MAX_UPLOAD_MB = Number.isFinite(configuredUploadLimit) && configuredUploadLimit > 0 ? configuredUploadLimit : 5;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const SUPPORTED_FILE_TYPES = {
+    txt: ["text/plain"],
+    pdf: ["application/pdf", "application/x-pdf"],
+    docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+};
 
 export default function Home() {
     const appName = import.meta.env.VITE_APP_NAME || "WriteWise AI";
     const [text, setText] = useState("");
     const [tone, setTone] = useState("Professional");
+    const [writingContext, setWritingContext] = useState("General");
     const [result, setResult] = useState(null);
     const [error, setError] = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -34,7 +44,13 @@ export default function Home() {
     const [isSavingAnalysis, setIsSavingAnalysis] = useState(false);
     const [savedAnalysisId, setSavedAnalysisId] = useState("");
     const [saveError, setSaveError] = useState("");
+    const [isUploading, setIsUploading] = useState(false);
+    const [isFileDragOver, setIsFileDragOver] = useState(false);
+    const [uploadError, setUploadError] = useState("");
+    const [uploadNotice, setUploadNotice] = useState("");
+    const [uploadedFilename, setUploadedFilename] = useState("");
     const editorRef = useRef(null);
+    const fileInputRef = useRef(null);
 
     async function handleAnalyze() {
         setAnalysisError("");
@@ -45,7 +61,7 @@ export default function Home() {
         setAnalysis(null);
         setIsAnalyzing(true);
         try {
-            const response = await analyzeWriting(text);
+            const response = await analyzeWriting(text, writingContext);
             if (!response?.success) throw new Error(response?.message || "Analysis could not be completed.");
             setAnalysis(response);
             setAnalysisText(text);
@@ -75,6 +91,70 @@ export default function Home() {
         } finally {
             setIsSavingAnalysis(false);
         }
+    }
+
+    async function handleUploadFile(file) {
+        if (isUploading) return;
+        setUploadError("");
+        setUploadNotice("");
+        if (!file) return;
+        const extension = file.name.split(".").pop()?.toLowerCase();
+        const allowedMimes = SUPPORTED_FILE_TYPES[extension];
+        if (!allowedMimes) {
+            setUploadError("Unsupported file type. Choose a TXT, PDF, or DOCX file.");
+            return;
+        }
+        if (file.size === 0) {
+            setUploadError("This file is empty. Choose a file that contains text.");
+            return;
+        }
+        const mime = file.type?.toLowerCase();
+        if (mime && mime !== "application/octet-stream" && !allowedMimes.includes(mime)) {
+            setUploadError("The file type does not match its extension. Please choose a valid TXT, PDF, or DOCX file.");
+            return;
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+            setUploadError(`This file is too large. The upload limit is ${MAX_UPLOAD_MB} MB.`);
+            return;
+        }
+        if (text.trim() && !window.confirm("Uploading this file will replace the text currently in the editor. Continue?")) return;
+
+        setIsUploading(true);
+        try {
+            const response = await uploadWritingFile(file);
+            if (!response?.success) throw new Error(response?.message || "The file could not be processed.");
+            if (typeof response.text !== "string" || !response.text.trim()) {
+                throw new Error("No extractable text was found in this file. Your existing writing was kept.");
+            }
+            setText(response.text);
+            setResult(null);
+            setError("");
+            setAnalysisError("");
+            setManualEdit(true);
+            setUndoStack([]);
+            setCorrectionEdits([]);
+            setCorrectionNotice("");
+            setUploadedFilename(response.file?.filename || file.name);
+            setUploadNotice(`Text extracted successfully from ${response.file?.filename || file.name}. You can edit it or analyze it below.`);
+            setTimeout(() => editorRef.current?.focus(), 0);
+        } catch (requestError) {
+            setUploadError(requestError.response?.data?.message || requestError.message || "The file could not be uploaded. Your existing writing was kept.");
+        } finally {
+            setIsUploading(false);
+        }
+    }
+
+    function handleEditorDragOver(event) {
+        if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+        event.preventDefault();
+        setIsFileDragOver(true);
+    }
+
+    function handleEditorDrop(event) {
+        event.preventDefault();
+        setIsFileDragOver(false);
+        const [file] = Array.from(event.dataTransfer?.files || []);
+        if (file) handleUploadFile(file);
     }
 
     function locateFinding(error) {
@@ -129,7 +209,7 @@ export default function Home() {
         setCopied(false);
         setIsLoading(true);
         try {
-            setResult(await improveWriting(text, tone));
+            setResult(await improveWriting(text, tone, writingContext));
         } catch (requestError) {
             setError(
                 requestError.response?.data?.message
@@ -149,6 +229,22 @@ export default function Home() {
         }
     }
 
+    const explanations = result?.grammar_explanations || [];
+    const mandatoryExplanations = explanations.filter((item) => item.correction_type !== "optional");
+    const optionalExplanations = explanations.filter((item) => item.correction_type === "optional");
+
+    function renderExplanations(items, startIndex = 0) {
+        return items.map((item, index) => (
+            <div className="ww-explanation" key={`${item.original_text}-${startIndex + index}`}>
+                <p className="small text-secondary mb-1">Original</p>
+                <p className="mb-2">{item.original_text}</p>
+                <p className="small text-secondary mb-1">Suggested correction</p>
+                <p className="mb-2">{item.corrected_text}</p>
+                <p className="mb-0">{item.explanation}</p>
+            </div>
+        ));
+    }
+
     return (
         <main className="container py-5 ww-home">
             <header className="mb-4">
@@ -162,14 +258,24 @@ export default function Home() {
                 </p>
             </header>
 
-            <section className="ww-card p-4 p-md-5 mb-4" aria-labelledby="editor-title">
+            <section className={`ww-card p-4 p-md-5 mb-4${isFileDragOver ? " ww-drop-active" : ""}`} aria-labelledby="editor-title" onDragOver={handleEditorDragOver} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setIsFileDragOver(false); }} onDrop={handleEditorDrop}>
                 <h2 id="editor-title" className="h4 mb-2">Improve your writing</h2>
                 <p className="text-secondary mb-4">
                     Add your text, choose a tone, and get a rewrite with explanations and suggestions.
                     Your writing is saved to history only when you choose Save Analysis.
                 </p>
                 <form onSubmit={handleSubmit}>
-                    <label htmlFor="writing-text" className="form-label fw-semibold">Your text</label>
+                    <div className={`ww-editor-dropzone${isFileDragOver ? " is-active" : ""}`}>
+                    <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <label htmlFor="writing-text" className="form-label fw-semibold mb-0">Your text</label>
+                        <div className="d-flex align-items-center gap-2">
+                            {uploadedFilename && <span className="small text-secondary text-truncate ww-uploaded-name" title={uploadedFilename}>File: {uploadedFilename}</span>}
+                            <input ref={fileInputRef} className="visually-hidden" type="file" accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => { handleUploadFile(event.target.files?.[0]); event.target.value = ""; }} />
+                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                                {isUploading ? <><span className="spinner-border spinner-border-sm me-2" aria-hidden="true" />Uploading…</> : "Upload File"}
+                            </button>
+                        </div>
+                    </div>
                     <textarea
                         ref={editorRef}
                         id="writing-text"
@@ -188,6 +294,12 @@ export default function Home() {
                         aria-describedby="writing-count"
                         required
                     />
+                    {isFileDragOver && <div className="ww-drop-hint" aria-live="polite">Drop a TXT, PDF, or DOCX file to upload</div>}
+                    </div>
+                    <p className="small text-secondary mt-2 mb-0">Upload a TXT, PDF, or DOCX file (up to {MAX_UPLOAD_MB} MB), or drag it onto the editor.</p>
+                    {isUploading && <p className="small text-primary mt-2 mb-0" role="status"><span className="spinner-border spinner-border-sm me-2" aria-hidden="true" />Uploading and extracting text…</p>}
+                    {uploadError && <div className="alert alert-danger mt-3 mb-0" role="alert">{uploadError}</div>}
+                    {uploadNotice && <p className="small text-success mt-2 mb-0" role="status">{uploadNotice}</p>}
                     <div className="d-flex justify-content-between align-items-center mt-2 mb-4">
                         <span className="small text-secondary">Maximum {MAX_CHARACTERS.toLocaleString()} characters</span>
                         <span id="writing-count" className="small text-secondary" aria-live="polite">
@@ -196,6 +308,12 @@ export default function Home() {
                     </div>
 
                     <div className="row align-items-end g-3">
+                        <div className="col-12 col-sm-6">
+                            <label htmlFor="writing-context" className="form-label fw-semibold">Writing context</label>
+                            <select id="writing-context" className="form-select" value={writingContext} onChange={(event) => setWritingContext(event.target.value)}>
+                                {WRITING_CONTEXTS.map((option) => <option key={option}>{option}</option>)}
+                            </select>
+                        </div>
                         <div className="col-12 col-sm-6">
                             <label htmlFor="writing-tone" className="form-label fw-semibold">Tone</label>
                             <select
@@ -256,19 +374,19 @@ export default function Home() {
 
                     <article className="ww-card p-4 mb-3" aria-labelledby="grammar-title">
                         <h3 id="grammar-title" className="h5 mb-3">Grammar explanations</h3>
-                        {result.grammar_explanations.length === 0 ? (
+                        {explanations.length === 0 ? (
                             <p className="text-secondary mb-0">No specific grammar corrections to explain.</p>
                         ) : (
                             <div className="d-grid gap-3">
-                                {result.grammar_explanations.map((item, index) => (
-                                    <div className="ww-explanation" key={`${item.original_text}-${index}`}>
-                                        <p className="small text-secondary mb-1">Original</p>
-                                        <p className="mb-2">{item.original_text}</p>
-                                        <p className="small text-secondary mb-1">Corrected</p>
-                                        <p className="mb-2">{item.corrected_text}</p>
-                                        <p className="mb-0">{item.explanation}</p>
-                                    </div>
-                                ))}
+                                {mandatoryExplanations.length > 0 && <section aria-label="Mandatory corrections">
+                                    <h4 className="h6">Mandatory corrections</h4>
+                                    <div className="d-grid gap-3">{renderExplanations(mandatoryExplanations)}</div>
+                                </section>}
+                                {optionalExplanations.length > 0 && <section aria-label="Optional stylistic improvements">
+                                    <h4 className="h6">Optional stylistic improvements</h4>
+                                    <p className="small text-secondary">These are preferences, not required fixes. Keep the original when it better suits your voice or context.</p>
+                                    <div className="d-grid gap-3">{renderExplanations(optionalExplanations, mandatoryExplanations.length)}</div>
+                                </section>}
                             </div>
                         )}
                     </article>

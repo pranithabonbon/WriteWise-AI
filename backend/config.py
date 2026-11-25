@@ -12,14 +12,20 @@ def _split_csv(value: str) -> list[str]:
 
 
 class Config:
+    APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-secret")
     DEBUG = os.getenv("FLASK_DEBUG", "0") == "1"
     PORT = int(os.getenv("PORT", "5001"))
-    CORS_ORIGINS = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:5173"))
+    CORS_ORIGINS = _split_csv(os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ))
 
     # Used in later phases
     MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "5"))
-    MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024  # Flask rejects larger requests with 413
+    # Include a small multipart envelope allowance; FileExtractor enforces the
+    # exact file limit after Werkzeug has parsed the request.
+    MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024 + 64 * 1024
     MONGODB_URI = os.getenv("MONGODB_URI", "")
     MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "writewise_ai")
     MONGODB_TIMEOUT_MS = int(os.getenv("MONGODB_TIMEOUT_MS", "5000"))

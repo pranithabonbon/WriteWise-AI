@@ -33,8 +33,8 @@ class FakeImprovementService:
         self.error = error
         self.calls = []
 
-    def improve(self, text, tone):
-        self.calls.append((text, tone))
+    def improve(self, text, tone, context="General"):
+        self.calls.append((text, tone, context))
         if self.error:
             raise self.error
         return self.result
@@ -49,8 +49,8 @@ def test_improve_returns_structured_response_without_saving(client, monkeypatch)
     response = client.post("/api/improve", json={"text": "The team complete it.", "tone": "Academic"})
 
     assert response.status_code == 200
-    assert response.get_json() == {"success": True, "tone": "Academic", **sample_result()}
-    assert service.calls == [("The team complete it.", "Academic")]
+    assert response.get_json() == {"success": True, "tone": "Academic", "context": "General", **sample_result()}
+    assert service.calls == [("The team complete it.", "Academic", "General")]
 
 
 @pytest.mark.parametrize(
@@ -60,6 +60,7 @@ def test_improve_returns_structured_response_without_saving(client, monkeypatch)
         ({"text": "  "}, 400, "Please provide text to improve."),
         ({"text": 123}, 400, "Text must be a string."),
         ({"text": "hello", "tone": "casual"}, 400, "Tone must be"),
+        ({"text": "hello", "context": "Legal"}, 400, "Context must be"),
         ({"text": "x" * 12_001}, 400, "characters or fewer"),
     ],
 )

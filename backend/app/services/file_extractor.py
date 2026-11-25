@@ -5,6 +5,7 @@ The filename extension is checked, then the file bytes are checked too.
 A renamed or corrupted file is rejected even when the extension looks valid.
 """
 
+import re
 import zipfile
 from io import BytesIO
 
@@ -295,7 +296,7 @@ class FileExtractor:
 
             pages = []
             for page in document:
-                page_text = (page.get_text("text") or "").strip()
+                page_text = self._dehyphenate_pdf_text(page.get_text("text") or "").strip()
                 if page_text:
                     pages.append(page_text)
 
@@ -308,6 +309,43 @@ class FileExtractor:
             ) from exc
         finally:
             document.close()
+
+    @staticmethod
+    def _dehyphenate_pdf_text(text):
+        """Join likely line-wrap hyphenation without flattening paragraph breaks."""
+        compound_prefixes = {
+            "anti", "back", "business", "client", "cloud", "co", "cost",
+            "cross", "customer", "data", "decision", "deep", "double", "e",
+            "end", "ex", "follow", "front", "full", "high", "long", "low",
+            "machine", "multi", "non", "open", "part", "post", "pre",
+            "problem", "real", "re", "self", "server", "short", "single",
+            "source", "state", "time", "user", "well", "web", "wide", "word",
+            "year",
+        }
+        word_endings = (
+            "ability", "abilities", "als", "ance", "ances", "ant", "ants",
+            "ary", "aries", "ation", "ations", "ence", "ences", "ency",
+            "encies", "ible", "ibility", "ibilities", "ical", "ically", "ion",
+            "ions", "ism", "isms", "ist", "ists", "ity", "ities", "ive",
+            "ively", "ization", "izations", "ized", "izing", "ize", "less",
+            "ment", "ments", "ness", "nesses", "ous", "ously", "ship", "ships",
+            "tion", "tions", "tial", "tials", "ture", "tures",
+        )
+        pattern = re.compile(r"(?P<left>[A-Za-z]{1,40})-[ \t]*\n[ \t]*(?P<right>[a-z][A-Za-z]{1,40})")
+
+        def replace(match):
+            left = match.group("left")
+            right = match.group("right")
+            combined = left + right
+            if left.lower() in compound_prefixes:
+                return match.group(0)
+            if len(left) <= 2 and len(right) >= 5:
+                return combined
+            if any(right.lower().endswith(ending) for ending in word_endings) and len(left) >= 4:
+                return combined
+            return match.group(0)
+
+        return pattern.sub(replace, text)
 
     def _extract_docx(self, data):
         try:

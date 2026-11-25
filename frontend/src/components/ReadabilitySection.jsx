@@ -16,7 +16,7 @@ export default function ReadabilitySection({ data = {} }) {
     const ease = interpretation(data.flesch_reading_ease);
     return <article className="ww-card p-4 mb-3">
         <h3 className="h5 mb-1">Readability</h3>
-        <p className="small text-secondary">Flesch descriptions are approximate. Grade indices estimate reading difficulty and are not exact educational classifications.</p>
+        <p className="small text-secondary">These formula-based scores are rough estimates, not judgments of writing quality. Technical vocabulary, audience, and subject matter can affect them.</p>
         {ease && <p className="ww-insight mb-3">Reading ease: <strong>{ease}</strong></p>}
         <MetricGrid items={[
             ["Flesch Reading Ease", data.flesch_reading_ease], ["Flesch-Kincaid Grade", data.flesch_kincaid_grade],

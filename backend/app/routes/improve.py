@@ -13,6 +13,7 @@ from app.services.ai_improvement_service import (
     create_ai_improvement_service,
     validate_improvement_input,
 )
+from app.utils.writing_contexts import WRITING_CONTEXTS
 
 improve_bp = Blueprint("improve", __name__)
 
@@ -27,19 +28,21 @@ def improve_text():
 
     text = data.get("text")
     tone = data.get("tone", "Professional")
+    context = data.get("context", "General")
 
     # Validate before building a client, so empty/invalid input never reaches the provider.
     try:
-        validate_improvement_input(text, tone)
+        validate_improvement_input(text, tone, context)
     except InputValidationError as error:
         return _error(str(error), 400)
 
     try:
         service = create_ai_improvement_service(current_app.config)
-        result = service.improve(text, tone)
+        result = service.improve(text, tone, context)
         return jsonify({
             "success": True,
             "tone": tone,
+            "context": context,
             **result,
         }), 200
     except InputValidationError as error:

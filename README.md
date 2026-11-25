@@ -156,3 +156,93 @@ From `backend`:
 ```powershell
 .\venv\Scripts\python.exe -m pytest -v
 ```
+
+## Production deployment (Vercel + Render)
+
+The frontend is a Vite static site and the API is a Flask service. The API is served by Gunicorn in production. The backend Docker image includes Java 17 and downloads the LanguageTool distribution during its build; Render's native Python runtime does not include the JVM LanguageTool needs. The image keeps one Gunicorn worker because the LanguageTool process is shared and serialized within the app process.
+
+### 1. Deploy the Flask API to Render
+
+Create a Render **Web Service** from this repository with:
+
+| Setting | Value |
+| --- | --- |
+| Root Directory | `backend` |
+| Runtime | `Docker` |
+| Dockerfile Path | `./Dockerfile` |
+| Docker Build Context Directory | `.` |
+| Health Check Path | `/api/health` |
+
+The Dockerfile starts Gunicorn on Render's injected `PORT`. Do not use `python run.py` as the production start command.
+
+Set these variables in Render's service Environment page. Enter secret values in the dashboard only; never commit them or place them in a `VITE_` variable.
+
+| Variable | Required value |
+| --- | --- |
+| `APP_ENV` | `production` |
+| `SECRET_KEY` | At least 32 random characters; generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `FLASK_DEBUG` | `0` (do not enable debug in production) |
+| `CORS_ORIGINS` | Exact HTTPS Vercel production origin, e.g. `https://your-project.vercel.app`; add each intended custom/preview origin as its own comma-separated origin |
+| `MONGODB_URI` | Atlas application connection string (`mongodb+srv://...`) |
+| `MONGODB_DB_NAME` | `writewise_ai` (or your chosen database name) |
+| `MONGODB_TIMEOUT_MS` | `5000` |
+| `LLM_PROVIDER` | `gemini` |
+| `GEMINI_API_KEY` | Your server-side Google AI Studio API key |
+| `LLM_MODEL` | A Gemini model ID enabled for that key |
+| `LLM_TIMEOUT_SECONDS` | `30` |
+| `MAX_UPLOAD_MB` | `5` |
+
+The service refuses to start in production if the secret, exact HTTPS CORS origin, Atlas URI, or selected AI provider credentials/model are missing or invalid. CORS does not accept `*` in production.
+
+In Atlas, create a database user with only the access this app needs and add the Render service's outbound IP ranges to the Atlas project IP access list. Find the current ranges in the Render service's **Connect → Outbound** panel; Render ranges are region-specific and may be shared. Avoid `0.0.0.0/0`. Atlas requires the client source to be allowlisted and the database user to authenticate. [Render outbound IP guidance](https://render.com/docs/outbound-ip-addresses), [Atlas connection troubleshooting](https://www.mongodb.com/docs/atlas/troubleshoot-connection/).
+
+To verify the Atlas connection and create the app's indexes, configure a local backend environment with the same Atlas URI, allowlist your current IP in Atlas temporarily, then run `python -m scripts.setup_db` from `backend`. The script performs a temporary write/read/delete check and removes its check document.
+
+The app connects to Atlas lazily and the health endpoint reports the database state. After creating the Render service, check `GET https://<service>.onrender.com/api/health` and confirm `database` is `connected`.
+
+### 2. Deploy the React frontend to Vercel
+
+Import this repository as a Vercel project and set:
+
+| Setting | Value |
+| --- | --- |
+| Root Directory | `frontend` |
+| Framework Preset | `Vite` |
+| Node.js Version | `22.x` (Vite requires Node `20.19+` or `22.12+`; use the current 22.x runtime) |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
+
+Set this Vercel environment variable for Production (and Preview too if you intend to use previews):
+
+```dotenv
+VITE_API_BASE_URL=https://<your-render-service>.onrender.com/api
+```
+
+Set `VITE_APP_NAME` and `VITE_MAX_UPLOAD_MB` only if you want to override their defaults. Vite embeds every `VITE_` value in browser assets, so use this prefix only for public settings. API keys, `SECRET_KEY`, and `MONGODB_URI` belong only in Render. The SPA rewrite in `frontend/vercel.json` supports direct loading of the History route. Vercel’s Vite docs describe the SPA rewrite and build-time environment behavior: [Vite on Vercel](https://vercel.com/docs/frameworks/frontend/vite).
+
+After the first Vercel deploy, copy its exact HTTPS origin into Render's `CORS_ORIGINS`, save, and redeploy the API. Add custom domains there as well. Preview URLs are separate origins; add only the preview origins you explicitly want to allow.
+
+### 3. Local development after deployment configuration
+
+Keep the checked-in examples as templates and create local files from them:
+
+```powershell
+Copy-Item backend/.env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
+```
+
+In `backend/.env`, use `APP_ENV=development`, `FLASK_DEBUG=1`, local CORS origins, and your local Atlas/Gemini values if you want those features. In `frontend/.env`, keep `VITE_API_BASE_URL=/api`; Vite proxies `/api` to `http://127.0.0.1:5001`. Run the Flask development server from `backend` and Vite from `frontend` as described above. Local grammar checking needs Java 17 or later; if a cached LanguageTool install is not present, the wrapper downloads it into its cache on first check. `WRITEWISE_LANGUAGETOOL_JAR_DIR` is optional for pointing at an existing installation.
+
+### Upload and persistence behavior
+
+The application accepts up to 5 MB per file. Flask allows an additional 64 KiB for multipart request framing, while `FileExtractor` enforces the exact file-byte limit. The extractor reads the request stream into memory and parses PDF/DOCX data from bytes/`BytesIO`; it does not write user uploads to an application upload directory. Werkzeug may spool request bodies to its temporary directory and closes those request streams after handling the request. Render's ephemeral filesystem is therefore not used as durable storage. Saved writing history is stored in Atlas.
+
+### Environment variables and secret locations
+
+Backend settings read by Flask: `APP_ENV`, `SECRET_KEY`, `FLASK_DEBUG`, `PORT`, `CORS_ORIGINS`, `MAX_UPLOAD_MB`, `MONGODB_URI`, `MONGODB_DB_NAME`, `MONGODB_TIMEOUT_MS`, `LLM_PROVIDER`, `ANTHROPIC_API_KEY` (only for the optional Anthropic provider), `GEMINI_API_KEY`, `LLM_MODEL`, and `LLM_TIMEOUT_SECONDS`. Optional LanguageTool paths are `WRITEWISE_LANGUAGETOOL_JAR_DIR`, `LTP_PATH`, and `LTP_JAR_DIR_PATH`; the Render Docker image manages its cache internally.
+
+Frontend-exposed build settings: `VITE_API_BASE_URL`, `VITE_APP_NAME`, and `VITE_MAX_UPLOAD_MB`. These are public bundle configuration, not secret storage. The checked-in `.env` files are ignored by Git; `.env.example` files contain placeholders only.
+
+### Production limitation to resolve before public use
+
+Saved writing history routes currently have no authentication or per-user authorization. Anyone who can reach the API can list or delete the shared saved history. Do not store sensitive user writing or expose the public service until access control is implemented or an equivalent access restriction is in place. The existing `users` model is not wired into authentication routes.

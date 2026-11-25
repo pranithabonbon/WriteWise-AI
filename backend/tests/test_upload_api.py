@@ -197,7 +197,7 @@ def test_upload_analysis_query_runs_nlp_pipeline(client, monkeypatch):
         def __init__(self, language="en-US"):
             self.language = language
 
-        def analyze(self, text):
+        def analyze(self, text, context="General"):
             return {
                 "error_count": 0,
                 "errors": [],

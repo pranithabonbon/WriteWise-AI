@@ -11,6 +11,8 @@ from app.services.sentence_complexity_analyzer import (
 from app.services.writing_score_calculator import (
     WritingScoreCalculator
 )
+from app.services.recommendation_service import build_recommendations
+from app.utils.writing_contexts import WRITING_CONTEXTS
 
 
 class AnalysisService:
@@ -24,7 +26,7 @@ class AnalysisService:
         self.sentence_analyzer = SentenceComplexityAnalyzer()
         self.score_calculator = WritingScoreCalculator()
 
-    def analyze(self, text):
+    def analyze(self, text, context="General"):
         """Analyze text and return a complete report."""
 
         if not isinstance(text, str):
@@ -36,8 +38,11 @@ class AnalysisService:
                 "message": "Please provide text to analyze."
             }
 
+        if context not in WRITING_CONTEXTS:
+            raise ValueError("Unsupported writing context.")
+
         # 1. Grammar analysis
-        grammar_result = self.grammar_analyzer.analyze(text)
+        grammar_result = self.grammar_analyzer.analyze(text, context=context)
 
         # 2. Readability analysis
         readability_result = self.readability_analyzer.analyze(text)
@@ -66,12 +71,14 @@ class AnalysisService:
             grammar=grammar_result,
             readability=readability_metrics,
             vocabulary=vocabulary_metrics,
-            sentence_complexity=sentence_metrics
+            sentence_complexity=sentence_metrics,
+            context=context,
         )
 
         # 6. Combine everything
-        return {
+        result = {
             "success": True,
+            "context": context,
             "message": "Writing analysis completed successfully.",
             "grammar": grammar_result,
             "readability": readability_result,
@@ -79,3 +86,5 @@ class AnalysisService:
             "sentence_complexity": sentence_result,
             "score": score_result
         }
+        result["recommendations"] = build_recommendations(result)
+        return result
