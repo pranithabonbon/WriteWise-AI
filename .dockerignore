@@ -1,0 +1,29 @@
+# Docker build context exclusions. Keep local credentials out of every image.
+.git
+.git/**
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+**/venv
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/*.egg-info
+
+# Node and generated output
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+
+# Local state and editor files
+**/*.log
+**/.cache
+**/uploads
+.vscode
+.idea
+.DS_Store
+Thumbs.db

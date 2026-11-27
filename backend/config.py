@@ -33,6 +33,7 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
     LLM_MODEL = os.getenv("LLM_MODEL", "")
+    LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "")
     LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
 

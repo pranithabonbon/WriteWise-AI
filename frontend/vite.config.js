@@ -8,7 +8,9 @@ export default defineConfig({
     proxy: {
       // Browser calls /api/... on port 5173; Vite forwards it to Flask on 5001
       "/api": {
-        target: "http://127.0.0.1:5001",
+        // In Compose, Vite runs in its own container and must use the backend
+        // service name. The loopback default keeps non-Docker local dev intact.
+        target: process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:5001",
         changeOrigin: true,
       },
     },

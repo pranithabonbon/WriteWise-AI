@@ -25,5 +25,5 @@ RUN useradd --create-home --uid 10001 writewise \
     && chown -R writewise:writewise /app
 USER writewise
 
-EXPOSE 10000
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-10000} --workers 1 --threads 4 --timeout 120 run:app"]
+EXPOSE 5001
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5001} --workers 1 --threads 4 --timeout 120 run:app"]

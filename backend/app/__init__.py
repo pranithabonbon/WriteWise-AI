@@ -30,12 +30,14 @@ def create_app(config_class=Config):
     from app.routes.upload import upload_bp
     from app.routes.improve import improve_bp
     from app.routes.history import history_bp
+    from app.routes.agent import agent_bp
 
     app.register_blueprint(health_bp, url_prefix="/api")
     app.register_blueprint(analyze_bp, url_prefix="/api")
     app.register_blueprint(upload_bp, url_prefix="/api")
     app.register_blueprint(improve_bp, url_prefix="/api")
     app.register_blueprint(history_bp, url_prefix="/api")
+    app.register_blueprint(agent_bp, url_prefix="/api")
 
     @app.errorhandler(404)
     def not_found(_error):
@@ -91,3 +93,5 @@ def _validate_production_config(config):
     key_name = "GEMINI_API_KEY" if provider == "gemini" else "ANTHROPIC_API_KEY"
     if provider not in ("gemini", "anthropic") or not str(config.get(key_name, "")).strip() or not str(config.get("LLM_MODEL", "")).strip():
         raise RuntimeError("Production requires a configured AI provider key and model.")
+
+
