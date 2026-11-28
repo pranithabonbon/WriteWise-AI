@@ -21,6 +21,7 @@ SUGGESTION_CATEGORIES = (
 MAX_INPUT_CHARACTERS = 12_000
 logger = logging.getLogger(__name__)
 GEMINI_MAX_RETRIES = 2
+AI_REQUEST_BUDGET_SECONDS = 38
 _PROXY_ENV_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 
 
@@ -59,6 +60,42 @@ def _httpx_version() -> str:
         return httpx.__version__
     except Exception:
         return "unavailable"
+
+
+class AIRequestDeadline:
+    """One monotonic wall-clock budget shared by all provider calls in a request."""
+
+    def __init__(self, budget_seconds: float = AI_REQUEST_BUDGET_SECONDS):
+        self._expires_at = time.monotonic() + budget_seconds
+
+    def remaining(self) -> float:
+        return max(0.0, self._expires_at - time.monotonic())
+
+    def apply_to_client(self, client, configured_timeout: float) -> float:
+        remaining = self.remaining()
+        if remaining <= 0:
+            raise AIProviderTimeoutError("The AI request exceeded its time limit.")
+
+        # google-genai 3.6.1 passes HttpOptions.timeout (milliseconds) on each
+        # request, overriding HTTPX's client default. Cap both SDK options and
+        # the HTTPX default so every retry uses only the remaining budget.
+        api_client = getattr(client, "_api_client", None)
+        http_client = getattr(api_client, "_httpx_client", None)
+        bounded_timeout = min(float(configured_timeout), remaining)
+        sdk_options = getattr(api_client, "_http_options", None)
+        if sdk_options is not None:
+            sdk_options.timeout = bounded_timeout * 1000
+        if http_client is not None:
+            http_client.timeout = bounded_timeout
+        return bounded_timeout
+
+    def sleep(self, seconds: float) -> None:
+        remaining = self.remaining()
+        if remaining <= 0:
+            raise AIProviderTimeoutError("The AI request exceeded its time limit.")
+        time.sleep(min(seconds, remaining))
+        if self.remaining() <= 0:
+            raise AIProviderTimeoutError("The AI request exceeded its time limit.")
 
 
 class AIImprovementError(Exception):
@@ -363,6 +400,7 @@ class GeminiProvider:
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.request_deadline = AIRequestDeadline()
         self.client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(
@@ -397,18 +435,32 @@ class GeminiProvider:
         )
         import httpx
         for attempt in range(GEMINI_MAX_RETRIES + 1):
+            started_at = time.monotonic()
             try:
+                self.request_deadline.apply_to_client(self.client, self.timeout_seconds)
                 response = self.client.models.generate_content(
                     model=self.model, contents=prompt, config=request_config,
+                )
+                if self.request_deadline.remaining() <= 0:
+                    raise AIProviderTimeoutError("The AI request exceeded its time limit.")
+                logger.info(
+                    "Gemini rewrite call completed (model=%s, attempt=%s, duration_ms=%s)",
+                    self.model, attempt + 1,
+                    round((time.monotonic() - started_at) * 1000),
                 )
                 break
             except errors.APIError as error:
                 code = getattr(error, "code", None)
+                logger.warning(
+                    "Gemini rewrite call failed (model=%s, attempt=%s, duration_ms=%s, status=%s)",
+                    self.model, attempt + 1,
+                    round((time.monotonic() - started_at) * 1000), code,
+                )
                 if code not in (408, 429, 500, 502, 503, 504):
                     _log_gemini_api_error(error, self.api_key)
                     raise AIProviderError("The AI service could not complete the request.") from error
                 if attempt < GEMINI_MAX_RETRIES:
-                    time.sleep(0.5 * (2 ** attempt))
+                    self.request_deadline.sleep(0.5 * (2 ** attempt))
                     continue
                 _log_gemini_api_error(error, self.api_key)
                 if code == 429:
@@ -417,10 +469,16 @@ class GeminiProvider:
                     raise AIProviderTimeoutError("The AI request timed out.") from error
                 raise AIProviderError("The AI service could not complete the request.") from error
             except httpx.TransportError as error:
-                logger.warning("Gemini transport failure (error_type=%s, attempt=%s)", type(error).__name__, attempt + 1)
+                logger.warning(
+                    "Gemini transport failure (error_type=%s, attempt=%s, duration_ms=%s)",
+                    type(error).__name__, attempt + 1,
+                    round((time.monotonic() - started_at) * 1000),
+                )
                 if attempt < GEMINI_MAX_RETRIES:
-                    time.sleep(0.5 * (2 ** attempt))
+                    self.request_deadline.sleep(0.5 * (2 ** attempt))
                     continue
+                if isinstance(error, httpx.TimeoutException):
+                    raise AIProviderTimeoutError("The AI request timed out.") from error
                 log_gemini_exception(error, self.api_key, text)
                 raise AIProviderError("The AI service could not complete the request.") from error
             except Exception as error:

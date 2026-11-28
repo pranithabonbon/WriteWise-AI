@@ -8,6 +8,7 @@ const apiBaseUrl = configuredApiBaseUrl.replace(/\/+$/, "");
 const normalizedApiBaseUrl = /\/api$/i.test(apiBaseUrl)
     ? apiBaseUrl
     : `${apiBaseUrl}/api`;
+export const AI_REQUEST_TIMEOUT_MS = 45000;
 
 // One configured Axios instance: every backend call goes through here.
 const client = axios.create({
@@ -30,7 +31,7 @@ export const improveWriting = async (text, tone, context = "General") => {
     const { data } = await client.post(
         "/improve",
         { text, tone, context },
-        { timeout: 45000 },
+        { timeout: AI_REQUEST_TIMEOUT_MS },
     );
     return data;
 };

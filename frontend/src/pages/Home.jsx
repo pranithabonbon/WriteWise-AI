@@ -211,8 +211,12 @@ export default function Home() {
         try {
             setResult(await improveWriting(text, tone, writingContext));
         } catch (requestError) {
+            const requestTimedOut = ["ECONNABORTED", "ETIMEDOUT"].includes(requestError.code);
             setError(
                 requestError.response?.data?.message
+                    || (requestTimedOut
+                        ? "The AI request took too long to finish. Please try again."
+                        : null)
                     || "We couldn’t improve this text right now. Please try again.",
             );
         } finally {

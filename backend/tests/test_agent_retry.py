@@ -8,6 +8,7 @@ from app.services.ai_agent_service import (
     generate_with_retry,
 )
 from app.services.ai_improvement_service import AIProviderError
+from app.services.ai_improvement_service import AIProviderTimeoutError, AIRequestDeadline
 
 
 def api_error(status):
@@ -63,6 +64,38 @@ def test_agent_gemini_client_ignores_ambient_proxy_settings(monkeypatch):
 
     options = genai.Client.call_args.kwargs["http_options"]
     assert options.client_args == {"trust_env": False}
+
+
+def test_agent_deadline_prevents_a_provider_call_after_budget():
+    client = Mock()
+
+    with pytest.raises(AIProviderTimeoutError, match="time limit"):
+        generate_with_retry(
+            client, "configured-model", [], {}, deadline=AIRequestDeadline(0)
+        )
+
+    client.models.generate_content.assert_not_called()
+
+
+def test_deadline_caps_each_sdk_http_timeout(monkeypatch):
+    from types import SimpleNamespace
+    from app.services import ai_improvement_service as improvement_module
+
+    clock_values = iter([100.0, 106.0])
+    monkeypatch.setattr(improvement_module.time, "monotonic", lambda: next(clock_values))
+    client = SimpleNamespace(
+        _api_client=SimpleNamespace(
+            _http_options=SimpleNamespace(timeout=30000),
+            _httpx_client=SimpleNamespace(timeout=30.0),
+        )
+    )
+    deadline = AIRequestDeadline(10)
+
+    capped_timeout = deadline.apply_to_client(client, 30)
+
+    assert capped_timeout == 4.0
+    assert client._api_client._http_options.timeout == 4000
+    assert client._api_client._httpx_client.timeout == 4.0
 
 
 def test_generate_with_retry_does_not_retry_permanent_api_errors():

@@ -163,6 +163,8 @@ LLM_FALLBACK_MODEL=
 LLM_TIMEOUT_SECONDS=30
 ```
 
+`LLM_TIMEOUT_SECONDS` caps one Gemini attempt. AI Rewrite and the complete AI Agent flow share a 38-second backend deadline across retries, fallback, and nested rewrite calls. The frontend waits up to 45 seconds for the API response, leaving time for the backend to return a timeout response before Axios gives up.
+
 Install the backend dependencies after updating the provider package:
 
 ```bash
@@ -251,7 +253,7 @@ Set these variables in Render's service Environment page. Enter secret values in
 | `GEMINI_API_KEY` | Your server-side Google AI Studio API key |
 | `LLM_MODEL` | A Gemini model ID enabled for that key |
 | `LLM_FALLBACK_MODEL` | Optional Gemini model ID for agent fallback after temporary primary-model `429`/`503` errors |
-| `LLM_TIMEOUT_SECONDS` | `30` |
+| `LLM_TIMEOUT_SECONDS` | `30` maximum for each Gemini attempt; total AI request budget is 38 seconds |
 | `MAX_UPLOAD_MB` | `5` |
 
 The service refuses to start in production if the secret, exact HTTPS CORS origin, Atlas URI, or selected AI provider credentials/model are missing or invalid. CORS does not accept `*` in production.

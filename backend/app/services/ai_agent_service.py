@@ -5,7 +5,8 @@ import time
 
 from app.services.ai_improvement_service import (
     AIConfigurationError, AIProviderError, AIProviderRateLimitError,
-    AIProviderTimeoutError, InvalidAIResponseError, create_ai_improvement_service,
+    AIProviderTimeoutError, AIRequestDeadline, InvalidAIResponseError,
+    create_ai_improvement_service,
     log_gemini_exception,
     validate_improvement_input,
 )
@@ -33,18 +34,35 @@ class AIProviderTimeoutErrorWithStatus(AIProviderTimeoutError):
         self.status_code = status_code
 
 
-def generate_with_retry(client, model, contents, config, sleep=time.sleep, api_key="", user_text=""):
+def generate_with_retry(
+    client, model, contents, config, sleep=time.sleep, api_key="", user_text="",
+    deadline=None, configured_timeout=30,
+):
     """Retry temporary Gemini API and HTTP transport failures."""
     from google.genai import errors
     import httpx
 
     for attempt in range(MAX_PROVIDER_RETRIES + 1):
+        started_at = time.monotonic()
         try:
-            return client.models.generate_content(
+            if deadline is not None:
+                deadline.apply_to_client(client, configured_timeout)
+            response = client.models.generate_content(
                 model=model, contents=contents, config=config
             )
+            if deadline is not None and deadline.remaining() <= 0:
+                raise AIProviderTimeoutError("The AI request exceeded its time limit.")
+            logger.info(
+                "Gemini agent call completed (model=%s, attempt=%s, duration_ms=%s)",
+                model, attempt + 1, round((time.monotonic() - started_at) * 1000),
+            )
+            return response
         except errors.APIError as error:
             code = getattr(error, "code", None)
+            logger.warning(
+                "Gemini agent call failed (model=%s, attempt=%s, duration_ms=%s, status=%s)",
+                model, attempt + 1, round((time.monotonic() - started_at) * 1000), code,
+            )
             if code not in (408, 429, 500, 502, 503, 504):
                 logger.warning(
                     "Gemini model request failed (model=%s, status=%s)",
@@ -68,27 +86,37 @@ def generate_with_retry(client, model, contents, config, sleep=time.sleep, api_k
                 raise AIProviderUnavailableError(
                     "Gemini is temporarily unavailable after several attempts. Please try again shortly."
                 ) from error
-            sleep(0.5 * (2 ** attempt))
+            delay = 0.5 * (2 ** attempt)
+            deadline.sleep(delay) if deadline is not None else sleep(delay)
         except httpx.TransportError as error:
             logger.warning(
-                "Gemini transport request failed (model=%s, error_type=%s, attempt=%s)",
+                "Gemini transport request failed (model=%s, error_type=%s, attempt=%s, duration_ms=%s)",
                 model, type(error).__name__, attempt + 1,
+                round((time.monotonic() - started_at) * 1000),
             )
             if attempt == MAX_PROVIDER_RETRIES:
                 log_gemini_exception(error, api_key, user_text)
+                if isinstance(error, httpx.TimeoutException):
+                    raise AIProviderTimeoutErrorWithStatus(
+                        "Gemini timed out before the request deadline. Please try again."
+                    ) from error
                 raise AIProviderUnavailableError(
                     "Gemini is temporarily unavailable after several attempts. Please try again shortly."
                 ) from error
-            sleep(0.5 * (2 ** attempt))
+            delay = 0.5 * (2 ** attempt)
+            deadline.sleep(delay) if deadline is not None else sleep(delay)
 
 
 def generate_with_fallback(
     client, primary_model, fallback_model, contents, config, sleep=time.sleep,
-    api_key="", user_text="",
+    api_key="", user_text="", deadline=None, configured_timeout=30,
 ):
     """Use the configured fallback only after primary overload retries fail."""
     try:
-        return generate_with_retry(client, primary_model, contents, config, sleep, api_key, user_text)
+        return generate_with_retry(
+            client, primary_model, contents, config, sleep, api_key, user_text,
+            deadline, configured_timeout,
+        )
     except (
         AIProviderRateLimitError,
         AIProviderUnavailableError,
@@ -102,7 +130,10 @@ def generate_with_fallback(
         if not fallback_model or fallback_model == primary_model:
             raise
         try:
-            return generate_with_retry(client, fallback_model, contents, config, sleep, api_key, user_text)
+            return generate_with_retry(
+                client, fallback_model, contents, config, sleep, api_key, user_text,
+                deadline, configured_timeout,
+            )
         except AIProviderError as fallback_error:
             logger.warning(
                 "Gemini fallback model failed (model=%s, status=%s)",
@@ -119,6 +150,7 @@ class AIWritingAgent:
         from google import genai
         from google.genai import types
 
+        self.request_deadline = AIRequestDeadline()
         api_key = config.get("GEMINI_API_KEY")
         api_key = api_key.strip() if isinstance(api_key, str) else api_key
         self.model = config.get("LLM_MODEL")
@@ -129,10 +161,11 @@ class AIWritingAgent:
             raise AIConfigurationError("Gemini is not configured.")
         self.types = types
         self.api_key = api_key
+        self.timeout_seconds = int(config.get("LLM_TIMEOUT_SECONDS", 30))
         self.client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(
-                timeout=int(config.get("LLM_TIMEOUT_SECONDS", 30)) * 1000,
+                timeout=self.timeout_seconds * 1000,
                 retry_options=types.HttpRetryOptions(attempts=1),
                 client_args={"trust_env": False},
             ),
@@ -140,6 +173,9 @@ class AIWritingAgent:
         self.grammar = GrammarAnalyzer()
         self.readability = ReadabilityAnalyzer()
         self.improver = create_ai_improvement_service(config)
+        improver_provider = getattr(self.improver, "provider", None)
+        if hasattr(improver_provider, "request_deadline"):
+            improver_provider.request_deadline = self.request_deadline
 
     def analyze(self, text, goal, tone):
         validate_improvement_input(text, tone, "General")
@@ -172,6 +208,8 @@ class AIWritingAgent:
                     self.types.GenerateContentConfig(tools=tools, tool_config=self.types.ToolConfig(function_calling_config=self.types.FunctionCallingConfig(mode="AUTO")), max_output_tokens=1200),
                     api_key=self.api_key,
                     user_text=text,
+                    deadline=self.request_deadline,
+                    configured_timeout=self.timeout_seconds,
                 )
                 candidate = response.candidates[0].content
                 contents.append(candidate)
@@ -204,6 +242,8 @@ class AIWritingAgent:
                 contents.append(self.types.Content(role="user", parts=function_responses))
             else:
                 raise AIProviderError("Agent reached its tool-call limit.")
+            if self.request_deadline.remaining() <= 0:
+                raise AIProviderTimeoutError("The AI request exceeded its time limit.")
         except (AIConfigurationError, AIProviderError, AIProviderRateLimitError, AIProviderTimeoutError, InvalidAIResponseError):
             raise
         except Exception as error:
