@@ -2,8 +2,10 @@
 
 import json
 import logging
+import os
 import re
 import time
+import traceback
 from collections import Counter
 from typing import Protocol
 from app.utils.writing_contexts import WRITING_CONTEXTS
@@ -19,6 +21,44 @@ SUGGESTION_CATEGORIES = (
 MAX_INPUT_CHARACTERS = 12_000
 logger = logging.getLogger(__name__)
 GEMINI_MAX_RETRIES = 2
+_PROXY_ENV_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+
+
+def log_gemini_exception(error: Exception, api_key: str = "", user_text: str = "") -> None:
+    """Log transport diagnostics without request data or credential values."""
+
+    detail = str(error)
+    for secret in (api_key, user_text):
+        if secret:
+            detail = detail.replace(secret, "[REDACTED]")
+    detail = re.sub(
+        r"(?i)((?:x-goog-api-key|authorization|proxy-authorization)\s*[:=]\s*)[^\r\n,\]}]+",
+        r"\1[REDACTED]", detail,
+    )
+    detail = re.sub(r"(?i)(AIza[0-9a-z_-]{20,}|bearer\s+\S+)", "[REDACTED]", detail)
+    detail = re.sub(r"(?i)([?&](?:key|token|password)=)[^&\s]+", r"\1[REDACTED]", detail)
+    detail = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1[REDACTED]@", detail)
+    detail = re.sub(r"[\r\n\x00-\x1f]+", " ", detail)[:1000]
+    frames = "".join(traceback.format_list(traceback.extract_tb(error.__traceback__)))
+    logger.error(
+        "Gemini adapter exception (error_type=%s, error_module=%s, mro=%s, "
+        "httpx_version=%s, proxy_env_present=%s, error_detail=%s, traceback_frames=%s)",
+        type(error).__name__,
+        type(error).__module__,
+        ">".join(cls.__module__ + "." + cls.__name__ for cls in type(error).__mro__),
+        _httpx_version(),
+        [name for name in _PROXY_ENV_NAMES if os.environ.get(name)],
+        detail or "<empty>",
+        frames.strip() or "<no traceback>",
+    )
+
+
+def _httpx_version() -> str:
+    try:
+        import httpx
+        return httpx.__version__
+    except Exception:
+        return "unavailable"
 
 
 class AIImprovementError(Exception):
@@ -328,6 +368,9 @@ class GeminiProvider:
             http_options=types.HttpOptions(
                 timeout=timeout_seconds * 1000,
                 retry_options=types.HttpRetryOptions(attempts=1),
+                # The Gemini Developer API is directly reachable from Render;
+                # do not let deployment proxy variables rewrite this request.
+                client_args={"trust_env": False},
             ),
         )
 
@@ -378,12 +421,13 @@ class GeminiProvider:
                 if attempt < GEMINI_MAX_RETRIES:
                     time.sleep(0.5 * (2 ** attempt))
                     continue
+                log_gemini_exception(error, self.api_key, text)
                 raise AIProviderError("The AI service could not complete the request.") from error
             except Exception as error:
                 if "timeout" in type(error).__name__.lower():
                     logger.warning("Gemini request timed out (timeout_seconds=%s)", self.timeout_seconds)
                     raise AIProviderTimeoutError("The AI request timed out.") from error
-                logger.warning("Unexpected Gemini adapter failure (error_type=%s)", type(error).__name__)
+                log_gemini_exception(error, self.api_key, text)
                 raise AIProviderError("The AI service could not complete the request.") from error
         else:
             raise AIProviderError("The AI service could not complete the request.")

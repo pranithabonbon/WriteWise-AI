@@ -230,6 +230,7 @@ def test_gemini_provider_uses_sdk_json_schema_and_timeout(monkeypatch):
     assert client_config["api_key"] == "test-key"
     assert client_config["http_options"].timeout == 7000
     assert client_config["http_options"].retry_options.attempts == 1
+    assert client_config["http_options"].client_args == {"trust_env": False}
     kwargs = client.models.generate_content.call_args.kwargs
     assert kwargs["model"] == "gemini-3.5-flash-lite"
     assert "Friendly tone" in kwargs["contents"]
@@ -292,6 +293,49 @@ def test_gemini_provider_retries_transient_api_error(monkeypatch):
     assert result == valid_result()
     assert client.models.generate_content.call_count == 2
     assert delays == [0.5]
+
+
+def test_gemini_exception_diagnostic_redacts_key_and_submitted_text(caplog):
+    import h11
+    from app.services.ai_improvement_service import log_gemini_exception
+
+    key = "private-test-api-key"
+    user_text = "private submitted sentence"
+    try:
+        raise h11.LocalProtocolError(
+            f"Invalid header x-goog-api-key: {key}; body={user_text}"
+        )
+    except h11.LocalProtocolError as error:
+        with caplog.at_level("ERROR", logger="app.services.ai_improvement_service"):
+            log_gemini_exception(error, key, user_text)
+
+    assert "h11" in caplog.text
+    assert "LocalProtocolError" in caplog.text
+    assert "traceback_frames" in caplog.text
+    assert "private-test-api-key" not in caplog.text
+    assert user_text not in caplog.text
+
+
+def test_gemini_provider_diagnoses_h11_protocol_exception_safely(monkeypatch, caplog):
+    import h11
+
+    key = "test-secret-api-key"
+    user_text = "sample private writing"
+    client = Mock()
+    client.models.generate_content.side_effect = h11.LocalProtocolError(
+        f"invalid protocol header x-goog-api-key: {key}; {user_text}"
+    )
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+    provider = GeminiProvider(key, "test-model", 2)
+
+    with caplog.at_level("ERROR", logger="app.services.ai_improvement_service"):
+        with pytest.raises(AIProviderError):
+            provider.generate_improvement(user_text, "Professional")
+
+    assert "error_module=h11" in caplog.text or "error_module=h11." in caplog.text
+    assert "traceback_frames" in caplog.text
+    assert key not in caplog.text
+    assert user_text not in caplog.text
 
 
 @pytest.mark.parametrize(

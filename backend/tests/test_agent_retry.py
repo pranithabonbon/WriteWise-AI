@@ -46,6 +46,25 @@ def test_generate_with_retry_recovers_from_local_protocol_error():
     assert delays == [0.5]
 
 
+def test_agent_gemini_client_ignores_ambient_proxy_settings(monkeypatch):
+    from google import genai
+    from app.services import ai_agent_service as agent_module
+
+    client = Mock()
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+    monkeypatch.setattr(agent_module, "create_ai_improvement_service", Mock())
+
+    agent_module.AIWritingAgent({
+        "GEMINI_API_KEY": "test-key",
+        "LLM_PROVIDER": "gemini",
+        "LLM_MODEL": "test-model",
+        "LLM_TIMEOUT_SECONDS": 3,
+    })
+
+    options = genai.Client.call_args.kwargs["http_options"]
+    assert options.client_args == {"trust_env": False}
+
+
 def test_generate_with_retry_does_not_retry_permanent_api_errors():
     client = Mock()
     client.models.generate_content.side_effect = api_error(401)

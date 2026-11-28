@@ -6,6 +6,7 @@ import time
 from app.services.ai_improvement_service import (
     AIConfigurationError, AIProviderError, AIProviderRateLimitError,
     AIProviderTimeoutError, InvalidAIResponseError, create_ai_improvement_service,
+    log_gemini_exception,
     validate_improvement_input,
 )
 from app.services.grammar_analyzer import GrammarAnalyzer
@@ -32,7 +33,7 @@ class AIProviderTimeoutErrorWithStatus(AIProviderTimeoutError):
         self.status_code = status_code
 
 
-def generate_with_retry(client, model, contents, config, sleep=time.sleep):
+def generate_with_retry(client, model, contents, config, sleep=time.sleep, api_key="", user_text=""):
     """Retry temporary Gemini API and HTTP transport failures."""
     from google.genai import errors
     import httpx
@@ -74,6 +75,7 @@ def generate_with_retry(client, model, contents, config, sleep=time.sleep):
                 model, type(error).__name__, attempt + 1,
             )
             if attempt == MAX_PROVIDER_RETRIES:
+                log_gemini_exception(error, api_key, user_text)
                 raise AIProviderUnavailableError(
                     "Gemini is temporarily unavailable after several attempts. Please try again shortly."
                 ) from error
@@ -81,11 +83,12 @@ def generate_with_retry(client, model, contents, config, sleep=time.sleep):
 
 
 def generate_with_fallback(
-    client, primary_model, fallback_model, contents, config, sleep=time.sleep
+    client, primary_model, fallback_model, contents, config, sleep=time.sleep,
+    api_key="", user_text="",
 ):
     """Use the configured fallback only after primary overload retries fail."""
     try:
-        return generate_with_retry(client, primary_model, contents, config, sleep)
+        return generate_with_retry(client, primary_model, contents, config, sleep, api_key, user_text)
     except (
         AIProviderRateLimitError,
         AIProviderUnavailableError,
@@ -99,7 +102,7 @@ def generate_with_fallback(
         if not fallback_model or fallback_model == primary_model:
             raise
         try:
-            return generate_with_retry(client, fallback_model, contents, config, sleep)
+            return generate_with_retry(client, fallback_model, contents, config, sleep, api_key, user_text)
         except AIProviderError as fallback_error:
             logger.warning(
                 "Gemini fallback model failed (model=%s, status=%s)",
@@ -125,11 +128,13 @@ class AIWritingAgent:
         if str(config.get("LLM_PROVIDER", "gemini")).lower() != "gemini" or not api_key or not self.model:
             raise AIConfigurationError("Gemini is not configured.")
         self.types = types
+        self.api_key = api_key
         self.client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(
                 timeout=int(config.get("LLM_TIMEOUT_SECONDS", 30)) * 1000,
                 retry_options=types.HttpRetryOptions(attempts=1),
+                client_args={"trust_env": False},
             ),
         )
         self.grammar = GrammarAnalyzer()
@@ -165,6 +170,8 @@ class AIWritingAgent:
                     self.fallback_model,
                     contents,
                     self.types.GenerateContentConfig(tools=tools, tool_config=self.types.ToolConfig(function_calling_config=self.types.FunctionCallingConfig(mode="AUTO")), max_output_tokens=1200),
+                    api_key=self.api_key,
+                    user_text=text,
                 )
                 candidate = response.candidates[0].content
                 contents.append(candidate)
@@ -204,6 +211,7 @@ class AIWritingAgent:
             if isinstance(error, errors.APIError):
                 if getattr(error, "code", None) in (408, 504):
                     raise AIProviderTimeoutError("Gemini request timed out.") from error
+            log_gemini_exception(error, self.api_key, text)
             raise AIProviderError("Gemini could not complete the agent request.") from error
 
         return {
