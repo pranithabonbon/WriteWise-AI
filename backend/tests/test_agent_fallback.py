@@ -50,6 +50,27 @@ def test_fallback_model_is_used_after_primary_temporary_failures():
     assert models == ["primary-configured"] * 3 + ["fallback-configured"]
 
 
+def test_fallback_model_is_used_after_primary_transport_failures():
+    import httpx
+
+    client = Mock()
+    models = []
+
+    def generate_content(*, model, **_kwargs):
+        models.append(model)
+        if model == "primary-configured":
+            raise httpx.LocalProtocolError("transient protocol state")
+        return "fallback response"
+
+    client.models.generate_content.side_effect = generate_content
+    result = generate_with_fallback(
+        client, "primary-configured", "fallback-configured", [], {}, sleep=lambda _: None
+    )
+
+    assert result == "fallback response"
+    assert models == ["primary-configured"] * 3 + ["fallback-configured"]
+
+
 def test_fallback_both_models_fail_after_retry_limit(caplog):
     client = Mock()
     models = []

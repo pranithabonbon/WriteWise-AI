@@ -240,6 +240,60 @@ def test_gemini_provider_uses_sdk_json_schema_and_timeout(monkeypatch):
     ]
 
 
+def test_gemini_provider_trims_deployment_values(monkeypatch):
+    client = Mock()
+    client.models.generate_content.return_value = SimpleNamespace(text=json.dumps(valid_result()))
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+
+    GeminiProvider("  test-key\n", " gemini-3.5-flash-lite ", 5)
+
+    assert genai.Client.call_args.kwargs["api_key"] == "test-key"
+    assert genai.Client.call_args.kwargs["http_options"]
+
+
+def test_gemini_provider_retries_local_protocol_error(monkeypatch):
+    import httpx
+    from app.services import ai_improvement_service as service_module
+
+    client = Mock()
+    client.models.generate_content.side_effect = [
+        httpx.LocalProtocolError("transient protocol state"),
+        SimpleNamespace(text=json.dumps(valid_result())),
+    ]
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+    delays = []
+    monkeypatch.setattr(service_module.time, "sleep", delays.append)
+
+    result = GeminiProvider("test-key", "gemini-3.5-flash-lite", 5).generate_improvement(
+        "Some writing.", "Formal"
+    )
+
+    assert result == valid_result()
+    assert client.models.generate_content.call_count == 2
+    assert delays == [0.5]
+
+
+def test_gemini_provider_retries_transient_api_error(monkeypatch):
+    from app.services import ai_improvement_service as service_module
+
+    client = Mock()
+    client.models.generate_content.side_effect = [
+        gemini_errors.APIError(503, {"error": {"message": "temporary overload"}}),
+        SimpleNamespace(text=json.dumps(valid_result())),
+    ]
+    monkeypatch.setattr(genai, "Client", Mock(return_value=client))
+    delays = []
+    monkeypatch.setattr(service_module.time, "sleep", delays.append)
+
+    result = GeminiProvider("test-key", "gemini-3.5-flash-lite", 5).generate_improvement(
+        "Some writing.", "Formal"
+    )
+
+    assert result == valid_result()
+    assert client.models.generate_content.call_count == 2
+    assert delays == [0.5]
+
+
 @pytest.mark.parametrize(
     "code,expected",
     [

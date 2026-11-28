@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 from collections import Counter
 from typing import Protocol
 from app.utils.writing_contexts import WRITING_CONTEXTS
@@ -17,6 +18,7 @@ SUGGESTION_CATEGORIES = (
 )
 MAX_INPUT_CHARACTERS = 12_000
 logger = logging.getLogger(__name__)
+GEMINI_MAX_RETRIES = 2
 
 
 class AIImprovementError(Exception):
@@ -308,6 +310,10 @@ class GeminiProvider:
     """Google Gen AI SDK adapter for the Gemini Developer API."""
 
     def __init__(self, api_key: str, model: str, timeout_seconds: int):
+        # Whitespace pasted into a deployment secret becomes an invalid HTTP
+        # header value and httpx raises LocalProtocolError before any response.
+        api_key = api_key.strip() if isinstance(api_key, str) else api_key
+        model = model.strip() if isinstance(model, str) else model
         if not api_key or not model:
             raise AIConfigurationError("AI improvement is not configured.")
 
@@ -340,43 +346,47 @@ class GeminiProvider:
             "sentence structure, and repetition.\n\n"
             "TEXT TO IMPROVE:\n<writing>\n" + text + "\n</writing>"
         )
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction="Return only the requested structured writing improvement.",
-                    max_output_tokens=2200,
-                    response_mime_type="application/json",
-                    response_schema=_gemini_improvement_schema(),
-                ),
-            )
-        except errors.APIError as error:
-            code = getattr(error, "code", None)
-            _log_gemini_api_error(error, self.api_key)
-            if code == 429:
-                raise AIProviderRateLimitError(
-                    "The AI service is busy. Please try again shortly."
-                ) from error
-            if code in (408, 504):
-                raise AIProviderTimeoutError("The AI request timed out.") from error
-            raise AIProviderError(
-                "The AI service could not complete the request."
-            ) from error
-        except Exception as error:
-            if "timeout" in type(error).__name__.lower():
-                logger.warning(
-                    "Gemini request timed out (timeout_seconds=%s)",
-                    self.timeout_seconds,
+        request_config = types.GenerateContentConfig(
+            system_instruction="Return only the requested structured writing improvement.",
+            max_output_tokens=2200,
+            response_mime_type="application/json",
+            response_schema=_gemini_improvement_schema(),
+        )
+        import httpx
+        for attempt in range(GEMINI_MAX_RETRIES + 1):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model, contents=prompt, config=request_config,
                 )
-                raise AIProviderTimeoutError("The AI request timed out.") from error
-            logger.warning(
-                "Unexpected Gemini adapter failure (error_type=%s)",
-                type(error).__name__,
-            )
-            raise AIProviderError(
-                "The AI service could not complete the request."
-            ) from error
+                break
+            except errors.APIError as error:
+                code = getattr(error, "code", None)
+                if code not in (408, 429, 500, 502, 503, 504):
+                    _log_gemini_api_error(error, self.api_key)
+                    raise AIProviderError("The AI service could not complete the request.") from error
+                if attempt < GEMINI_MAX_RETRIES:
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+                _log_gemini_api_error(error, self.api_key)
+                if code == 429:
+                    raise AIProviderRateLimitError("The AI service is busy. Please try again shortly.") from error
+                if code in (408, 504):
+                    raise AIProviderTimeoutError("The AI request timed out.") from error
+                raise AIProviderError("The AI service could not complete the request.") from error
+            except httpx.TransportError as error:
+                logger.warning("Gemini transport failure (error_type=%s, attempt=%s)", type(error).__name__, attempt + 1)
+                if attempt < GEMINI_MAX_RETRIES:
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+                raise AIProviderError("The AI service could not complete the request.") from error
+            except Exception as error:
+                if "timeout" in type(error).__name__.lower():
+                    logger.warning("Gemini request timed out (timeout_seconds=%s)", self.timeout_seconds)
+                    raise AIProviderTimeoutError("The AI request timed out.") from error
+                logger.warning("Unexpected Gemini adapter failure (error_type=%s)", type(error).__name__)
+                raise AIProviderError("The AI service could not complete the request.") from error
+        else:
+            raise AIProviderError("The AI service could not complete the request.")
 
         output_text = getattr(response, "text", None)
         if not isinstance(output_text, str) or not output_text.strip():

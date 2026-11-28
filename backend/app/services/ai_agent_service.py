@@ -33,8 +33,9 @@ class AIProviderTimeoutErrorWithStatus(AIProviderTimeoutError):
 
 
 def generate_with_retry(client, model, contents, config, sleep=time.sleep):
-    """Retry temporary Gemini overload and gateway timeout responses."""
+    """Retry temporary Gemini API and HTTP transport failures."""
     from google.genai import errors
+    import httpx
 
     for attempt in range(MAX_PROVIDER_RETRIES + 1):
         try:
@@ -43,7 +44,7 @@ def generate_with_retry(client, model, contents, config, sleep=time.sleep):
             )
         except errors.APIError as error:
             code = getattr(error, "code", None)
-            if code not in (429, 503, 504):
+            if code not in (408, 429, 500, 502, 503, 504):
                 logger.warning(
                     "Gemini model request failed (model=%s, status=%s)",
                     model,
@@ -59,10 +60,20 @@ def generate_with_retry(client, model, contents, config, sleep=time.sleep):
                     )
                     retry_error.status_code = 429
                     raise retry_error from error
-                if code == 504:
+                if code in (408, 504):
                     raise AIProviderTimeoutErrorWithStatus(
                         "Gemini timed out after several attempts. Please try again shortly."
                     ) from error
+                raise AIProviderUnavailableError(
+                    "Gemini is temporarily unavailable after several attempts. Please try again shortly."
+                ) from error
+            sleep(0.5 * (2 ** attempt))
+        except httpx.TransportError as error:
+            logger.warning(
+                "Gemini transport request failed (model=%s, error_type=%s, attempt=%s)",
+                model, type(error).__name__, attempt + 1,
+            )
+            if attempt == MAX_PROVIDER_RETRIES:
                 raise AIProviderUnavailableError(
                     "Gemini is temporarily unavailable after several attempts. Please try again shortly."
                 ) from error
@@ -106,8 +117,11 @@ class AIWritingAgent:
         from google.genai import types
 
         api_key = config.get("GEMINI_API_KEY")
+        api_key = api_key.strip() if isinstance(api_key, str) else api_key
         self.model = config.get("LLM_MODEL")
+        self.model = self.model.strip() if isinstance(self.model, str) else self.model
         self.fallback_model = config.get("LLM_FALLBACK_MODEL") or None
+        self.fallback_model = self.fallback_model.strip() if isinstance(self.fallback_model, str) else self.fallback_model
         if str(config.get("LLM_PROVIDER", "gemini")).lower() != "gemini" or not api_key or not self.model:
             raise AIConfigurationError("Gemini is not configured.")
         self.types = types

@@ -29,6 +29,23 @@ def test_generate_with_retry_uses_two_exponential_backoff_retries():
     assert delays == [0.5, 1.0]
 
 
+def test_generate_with_retry_recovers_from_local_protocol_error():
+    import httpx
+
+    client = Mock()
+    expected = object()
+    client.models.generate_content.side_effect = [
+        httpx.LocalProtocolError("transient protocol state"), expected
+    ]
+    delays = []
+
+    assert generate_with_retry(
+        client, "configured-model", [], {}, sleep=delays.append
+    ) is expected
+    assert client.models.generate_content.call_count == 2
+    assert delays == [0.5]
+
+
 def test_generate_with_retry_does_not_retry_permanent_api_errors():
     client = Mock()
     client.models.generate_content.side_effect = api_error(401)
